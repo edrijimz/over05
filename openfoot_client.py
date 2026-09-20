@@ -30,8 +30,17 @@ class OpenFoot:
     def competitions(self):
         return self._get("competitions")
 
-    def matches_by_date(self, date_str: str):
-        return self._get("matches", date=date_str)
+    def matches_by_date(self, date_str: str, status: str | None = None):
+        params = {"date": date_str}
+        if status:
+            params["status"] = status
+        return self._get("matches", **params)
+
+    def matches_by_competition(self, competition_id: str, season: str | None = None):
+        params = {"competition": competition_id}
+        if season:
+            params["season"] = season
+        return self._get("matches", **params)
 
     def search(self, query: str):
         return self._get("search", q=query)
