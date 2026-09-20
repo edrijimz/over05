@@ -137,8 +137,8 @@ def get_whitelist_matches(key, day):
     unique = {m.get("id", f"{m.get('competitionId')}-{m.get('kickoffAt')}"): m for m in rows}
     return list(unique.values()), mapping, errors
 
-if not api_key:
-    st.error("Falta OPENFOOT_API_KEY en Streamlit Secrets.")
+if page == "Cobertura" and not api_key:
+    st.error("Falta OPENFOOT_API_KEY en Streamlit Secrets para consultar la cobertura de OpenFoot.")
     st.stop()
 
 if page == "Cobertura":
@@ -231,7 +231,11 @@ elif page == "Radar":
         })
 
     if not rows:
-        st.info("OpenFoot no devolvió partidos para esta fecha.")
+        st.info(f"{provider} no devolvió partidos para esta fecha con los filtros actuales.")
+        if provider.startswith("TheSportsDB"):
+            st.caption("La prueba gratuita de TheSportsDB tiene datos/endpoints limitados. Esto no significa que Premium carezca de partidos; primero estamos validando la conexión y la respuesta del endpoint.")
+        else:
+            st.caption("Revisa el diagnóstico de OpenFoot o prueba otro estado/fecha.")
     else:
         df = pd.DataFrame(rows)
         df = df.sort_values("_dt", na_position="last")
@@ -251,16 +255,23 @@ elif page == "Radar":
         c.metric("Tarde · 12:15 PM–11:30 PM", afternoon)
         dcol.metric("Fuera de tandas", outside)
         st.warning("Radar en modo de validación: todavía no asignamos Score +0.5 hasta fijar los IDs de nuestras ligas y cargar históricos.")
-        with st.expander("Diagnóstico OpenFoot"):
-            st.caption("Esto nos permite comprobar si la consulta global está paginada, limitada o tiene competiciones no disponibles.")
+        with st.expander(f"Diagnóstico · {provider}"):
+            st.caption("Información técnica para validar qué proveedor está ejecutando el Radar.")
             try:
+                st.write("**Proveedor activo**")
+                st.code(provider)
+                if provider.startswith("TheSportsDB"):
+                    st.write(f"Eventos recibidos antes del filtro de estado: {len(raw)}")
+                    if raw:
+                        st.json(raw[:3])
                 st.write("**Mapeo de ligas**")
                 st.json({f"{k[0]} · {k[1]}": v for k, v in league_mapping.items()})
                 if league_errors:
                     st.write("**Errores**")
                     st.json({f"{k[0]} · {k[1]}": err for k, err in league_errors})
-                st.write("**Metadata consulta global (referencia)**")
-                st.json(get_match_meta(api_key, d.isoformat()))
+                if provider == "OpenFoot":
+                    st.write("**Metadata consulta global (referencia)**")
+                    st.json(get_match_meta(api_key, d.isoformat()))
             except Exception as e:
                 st.error(f"No se pudo leer la metadata: {e}")
         view = st.radio("Tanda", ["Todos", "Mañana", "Tarde", "Fuera de tandas"], horizontal=True)
