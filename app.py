@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
@@ -22,8 +22,20 @@ def get_competitions(key):
     return OpenFoot(key).competitions()
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def get_matches(key, day):
-    return OpenFoot(key).matches_by_date(day)
+def get_matches_cr_day(key, day):
+    # OpenFoot filters "date" in UTC. A Costa Rica calendar day spans two UTC dates.
+    d = date.fromisoformat(day)
+    api = OpenFoot(key)
+    rows = api.matches_by_date(d.isoformat()) + api.matches_by_date((d + timedelta(days=1)).isoformat())
+    seen = {}
+    for m in rows:
+        if m.get("id"):
+            seen[m["id"]] = m
+    target = d
+    return [
+        m for m in seen.values()
+        if m.get("kickoffAt") and cr_time(m["kickoffAt"]).date() == target
+    ]
 
 def cr_time(iso):
     dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
@@ -82,11 +94,17 @@ if page == "Cobertura":
 elif page == "Radar":
     d = st.date_input("Fecha", date.today())
     cutoff = st.time_input("Corte horario CR", time(12, 45))
+    status_filter = st.selectbox("Estado", ["Próximos / en vivo", "Todos", "Finalizados"])
     try:
-        matches = get_matches(api_key, d.isoformat())
+        matches = get_matches_cr_day(api_key, d.isoformat())
     except Exception as e:
         st.error(f"No se pudieron cargar los partidos: {e}")
         st.stop()
+
+    if status_filter == "Próximos / en vivo":
+        matches = [m for m in matches if m.get("status") in {"scheduled", "live", "unknown"}]
+    elif status_filter == "Finalizados":
+        matches = [m for m in matches if m.get("status") == "finished"]
 
     rows = []
     for m in matches:
@@ -110,9 +128,21 @@ elif page == "Radar":
     else:
         df = pd.DataFrame(rows)
         df = df.sort_values("_dt", na_position="last")
-        st.write(f"**{len(df)} partidos devueltos por OpenFoot para {d.isoformat()}**")
+        st.write(f"**{len(df)} partidos para el día {d.isoformat()} en hora de Costa Rica**")
+        before = int(sum(x.time() < cutoff for x in df["_dt"] if pd.notna(x)))
+        after = int(sum(x.time() >= cutoff for x in df["_dt"] if pd.notna(x)))
+        a, b, c = st.columns(3)
+        a.metric("Mostrados", len(df))
+        b.metric("Antes del corte", before)
+        c.metric("Desde 12:45 PM", after)
         st.warning("Radar en modo de validación: todavía no asignamos Score +0.5 hasta fijar los IDs de nuestras ligas y cargar históricos.")
-        st.dataframe(df.drop(columns=["_dt"]), use_container_width=True, hide_index=True)
+        view = st.radio("Tanda", ["Todos", "Antes de 12:45", "Desde 12:45"], horizontal=True)
+        shown = df
+        if view == "Antes de 12:45":
+            shown = df[df["_dt"].apply(lambda x: x.time() < cutoff if pd.notna(x) else False)]
+        elif view == "Desde 12:45":
+            shown = df[df["_dt"].apply(lambda x: x.time() >= cutoff if pd.notna(x) else False)]
+        st.dataframe(shown.drop(columns=["_dt"]), use_container_width=True, hide_index=True)
 
 elif page == "Historial":
     cols, rows = evaluations()
