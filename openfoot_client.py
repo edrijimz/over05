@@ -12,7 +12,7 @@ class OpenFoot:
             "Accept": "application/json",
         })
 
-    def _get(self, endpoint: str, **params):
+    def _request(self, endpoint: str, **params):
         r = self.session.get(f"{OPENFOOT_BASE}/{endpoint}", params=params, timeout=30)
         try:
             payload = r.json()
@@ -22,7 +22,13 @@ class OpenFoot:
         if not r.ok:
             err = payload.get("error", {}) if isinstance(payload, dict) else {}
             raise RuntimeError(err.get("message") or f"HTTP {r.status_code}")
-        return payload.get("data", [])
+        return payload
+
+    def _get(self, endpoint: str, **params):
+        return self._request(endpoint, **params).get("data", [])
+
+    def matches_envelope(self, **params):
+        return self._request("matches", **params)
 
     def health(self):
         return self._get("health")
