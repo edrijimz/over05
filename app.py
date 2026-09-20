@@ -4,125 +4,115 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 
-from api_client import ApiFootball
-from analysis_engine import summarize, rate
+from openfoot_client import OpenFoot
 from database import evaluations
-from config import TIMEZONE
+from config import TIMEZONE, TARGET_LEAGUES
 
 st.set_page_config(page_title="Over 0.5 Analyzer", page_icon="⚽", layout="wide")
 st.title("⚽ Over 0.5 Goal Analyzer")
-st.caption("Análisis experimental de +0.5 goles. El score es un índice, no una probabilidad calibrada.")
+st.caption("Migración a OpenFoot · primero validamos cobertura antes de activar el radar completo.")
 
 with st.sidebar:
     st.header("Configuración")
-    secret = st.secrets.get("API_FOOTBALL_KEY", "") if hasattr(st, "secrets") else ""
-    api_key = st.text_input("API-Football key", value=secret, type="password")
-    page = st.radio("Sección", ["Análisis por liga", "Historial", "Metodología"])
+    api_key = st.secrets.get("OPENFOOT_API_KEY", "") if hasattr(st, "secrets") else ""
+    page = st.radio("Sección", ["Radar", "Cobertura", "Historial", "Metodología"])
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_competitions(key):
+    return OpenFoot(key).competitions()
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def get_fixtures(key, day):
-    return ApiFootball(key).fixtures_by_date(day)
-
-@st.cache_data(ttl=21600, show_spinner=False)
-def recent_form(key, team_id, before_date):
-    return ApiFootball(key).team_recent_free(team_id, before_date, limit=15)
-
-@st.cache_data(ttl=21600, show_spinner=False)
-def recent_h2h(key, home_id, away_id, before_date):
-    return ApiFootball(key).h2h_free(home_id, away_id, before_date, limit=5)
+def get_matches(key, day):
+    return OpenFoot(key).matches_by_date(day)
 
 def cr_time(iso):
     dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
     return dt.astimezone(ZoneInfo(TIMEZONE))
 
-def pct(part, total):
-    return round(100 * part / total) if total else 0
+def competition_fields(c):
+    name = c.get("name") or c.get("competitionName") or c.get("title") or ""
+    country = c.get("country")
+    if isinstance(country, dict):
+        country = country.get("name") or country.get("code")
+    country = country or c.get("area") or c.get("countryName") or ""
+    if isinstance(country, dict):
+        country = country.get("name") or country.get("code") or ""
+    return str(country), str(name)
 
-if page == "Análisis por liga":
-    d = st.date_input("Fecha", date.today())
-    if not api_key:
-        st.info("Configura API_FOOTBALL_KEY en los Secrets de Streamlit.")
-        st.stop()
+if not api_key:
+    st.error("Falta OPENFOOT_API_KEY en Streamlit Secrets.")
+    st.stop()
 
+if page == "Cobertura":
+    st.subheader("Prueba de cobertura de nuestras 32 ligas")
+    st.caption("Esta pantalla no analiza partidos todavía. Comprueba qué competiciones reconoce OpenFoot para decidir el mapeo definitivo.")
     try:
-        fixtures = get_fixtures(api_key, d.isoformat())
+        comps = get_competitions(api_key)
+        rows = []
+        for country, league in TARGET_LEAGUES:
+            words = {w.lower() for w in league.replace(".", "").split() if len(w) > 2}
+            candidates = []
+            for c in comps:
+                cc, cn = competition_fields(c)
+                text = f"{cc} {cn}".lower()
+                hits = sum(w in text for w in words)
+                country_hit = country.lower() in text
+                if hits and (country_hit or hits >= 2):
+                    candidates.append((hits + int(country_hit), cn, cc, c.get("id") or c.get("competitionId")))
+            candidates.sort(reverse=True)
+            best = candidates[0] if candidates else None
+            rows.append({
+                "País objetivo": country,
+                "Liga objetivo": league,
+                "Estado": "✅ Encontrada" if best else "⚠️ Sin coincidencia",
+                "OpenFoot": best[1] if best else "",
+                "País API": best[2] if best else "",
+                "ID": best[3] if best else "",
+            })
+        df = pd.DataFrame(rows)
+        a, b, c = st.columns(3)
+        a.metric("Configuradas", len(df))
+        b.metric("Coincidencias", int((df["Estado"] == "✅ Encontrada").sum()))
+        c.metric("Por revisar", int((df["Estado"] != "✅ Encontrada").sum()))
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.info("Una 'coincidencia' es provisional: después fijaremos manualmente los IDs correctos para evitar confundir ligas con nombres parecidos.")
+    except Exception as e:
+        st.error(f"No se pudo consultar OpenFoot: {e}")
+
+elif page == "Radar":
+    d = st.date_input("Fecha", date.today())
+    cutoff = st.time_input("Corte horario CR", time(12, 45))
+    try:
+        matches = get_matches(api_key, d.isoformat())
     except Exception as e:
         st.error(f"No se pudieron cargar los partidos: {e}")
         st.stop()
 
-    if not fixtures:
-        st.info("No se encontraron partidos para esta fecha.")
-        st.stop()
-
-    countries = sorted({f["league"].get("country") or "Otros" for f in fixtures})
-    c1, c2, c3 = st.columns([1.2, 1.8, 1.2])
-    country = c1.selectbox("País", ["Todos"] + countries)
-    country_fixtures = fixtures if country == "Todos" else [f for f in fixtures if (f["league"].get("country") or "Otros") == country]
-
-    leagues = sorted({(f["league"]["id"], f["league"]["name"]) for f in country_fixtures}, key=lambda x: x[1])
-    league_names = ["Selecciona una liga"] + [name for _, name in leagues]
-    league_name = c2.selectbox("Liga", league_names)
-    cutoff = c3.time_input("Corte horario CR", time(12, 45))
-
-    if league_name == "Selecciona una liga":
-        st.info("Selecciona una liga. La app analizará automáticamente todos sus partidos de la fecha.")
-        st.stop()
-
-    league_id = next(i for i, n in leagues if n == league_name)
-    selected = [f for f in country_fixtures if f["league"]["id"] == league_id]
-    selected.sort(key=lambda f: cr_time(f["fixture"]["date"]))
-
-    st.write(f"**{league_name} · {len(selected)} partido(s)**")
-    st.caption("La primera carga consulta forma reciente y H2H; después se reutiliza caché para no gastar llamadas innecesarias.")
-
     rows = []
-    progress = st.progress(0, text="Analizando liga…")
-    for idx, f in enumerate(selected):
-        home, away = f["teams"]["home"], f["teams"]["away"]
-        match_date = f["fixture"]["date"][:10]
-        try:
-            hf = recent_form(api_key, home["id"], match_date)
-            af = recent_form(api_key, away["id"], match_date)
-            hs, aas = summarize(hf, home["id"]), summarize(af, away["id"])
-            h2h = recent_h2h(api_key, home["id"], away["id"], match_date)
-            h2h_zz = sum(1 for x in h2h if x.get("goals", {}).get("home") == 0 and x.get("goals", {}).get("away") == 0)
-            score, label = rate(hs, aas, h2h_zz, len(h2h))
-            kickoff = cr_time(f["fixture"]["date"])
-            rows.append({
-                "Hora CR": kickoff.strftime("%I:%M %p").lstrip("0"),
-                "_dt": kickoff,
-                "Tanda": "Antes 12:45" if kickoff.time() < cutoff else "Después 12:45",
-                "Partido": f'{home["name"]} – {away["name"]}',
-                "Score +0.5": score,
-                "Estado": label,
-                "0-0 Local últ.10": f'{sum(1 for x in hf[:10] if x.get("goals",{}).get("home")==0 and x.get("goals",{}).get("away")==0)}/{min(len(hf),10)}',
-                "0-0 Visit. últ.10": f'{sum(1 for x in af[:10] if x.get("goals",{}).get("home")==0 and x.get("goals",{}).get("away")==0)}/{min(len(af),10)}',
-                "Local marca ≥1": f"{pct(hs.scored, hs.matches)}%",
-                "Visit. marca ≥1": f"{pct(aas.scored, aas.matches)}%",
-                "Local recibe ≥1": f"{pct(hs.conceded, hs.matches)}%",
-                "Visit. recibe ≥1": f"{pct(aas.conceded, aas.matches)}%",
-                "H2H 0-0 últ.5": f"{h2h_zz}/{len(h2h)}",
-            })
-        except Exception as e:
-            kickoff = cr_time(f["fixture"]["date"])
-            rows.append({"Hora CR": kickoff.strftime("%I:%M %p").lstrip("0"), "_dt": kickoff, "Tanda": "Error", "Partido": f'{home["name"]} – {away["name"]}', "Score +0.5": None, "Estado": f"⚠️ {e}"})
-        progress.progress((idx + 1) / len(selected), text=f"Analizando {idx+1}/{len(selected)}")
+    for m in matches:
+        comp = m.get("competition") or {}
+        comp_name = comp.get("name") if isinstance(comp, dict) else ""
+        comp_name = comp_name or m.get("competitionName") or m.get("competitionId") or ""
+        home = m.get("homeTeam") or {}
+        away = m.get("awayTeam") or {}
+        kickoff_raw = m.get("kickoffAt")
+        kickoff = cr_time(kickoff_raw) if kickoff_raw else None
+        rows.append({
+            "Hora CR": kickoff.strftime("%I:%M %p").lstrip("0") if kickoff else "",
+            "_dt": kickoff,
+            "Competición": comp_name,
+            "Partido": f'{home.get("name","")} – {away.get("name","")}',
+            "Estado API": m.get("status", ""),
+        })
 
-    progress.empty()
-    df = pd.DataFrame(rows).sort_values("_dt")
-    view = st.radio("Horario", ["Todos", "Antes del corte", "Después del corte"], horizontal=True)
-    if view == "Antes del corte":
-        df = df[df["_dt"].dt.time < cutoff]
-    elif view == "Después del corte":
-        df = df[df["_dt"].dt.time >= cutoff]
-
-    order = st.selectbox("Ordenar por", ["Hora", "Score (mayor a menor)"])
-    if order.startswith("Score"):
-        df = df.sort_values("Score +0.5", ascending=False, na_position="last")
+    if not rows:
+        st.info("OpenFoot no devolvió partidos para esta fecha.")
     else:
-        df = df.sort_values("_dt")
-
-    st.dataframe(df.drop(columns=["_dt"]), use_container_width=True, hide_index=True)
+        df = pd.DataFrame(rows)
+        df = df.sort_values("_dt", na_position="last")
+        st.write(f"**{len(df)} partidos devueltos por OpenFoot para {d.isoformat()}**")
+        st.warning("Radar en modo de validación: todavía no asignamos Score +0.5 hasta fijar los IDs de nuestras ligas y cargar históricos.")
+        st.dataframe(df.drop(columns=["_dt"]), use_container_width=True, hide_index=True)
 
 elif page == "Historial":
     cols, rows = evaluations()
@@ -131,18 +121,13 @@ elif page == "Historial":
         st.info("Todavía no hay evaluaciones guardadas.")
     else:
         st.dataframe(df, use_container_width=True, hide_index=True)
-        resolved = df[df["zero_zero"].notna()]
-        if not resolved.empty:
-            st.metric("+0.5 observado", f'{100*(1-resolved["zero_zero"].mean()):.1f}%')
 
 else:
-    st.subheader("Sistema +0.5 v1.1")
+    st.subheader("Sistema +0.5 · migración OpenFoot")
     st.markdown("""
-- Analiza automáticamente todos los partidos de la liga seleccionada.
-- Los horarios se muestran en hora de Costa Rica y pueden dividirse antes/después de un corte configurable.
-- Se muestran por separado los 0-0 recientes del local y del visitante.
-- H2H 0-0 mide solamente los enfrentamientos directos y tiene peso secundario.
-- El score prioriza forma reciente, frecuencia de marcar/recibir y ausencia de patrones 0-0.
-- Un 0-0 aislado no descarta automáticamente un partido.
-- El score es un índice experimental, no una probabilidad calibrada.
+- El universo se limita a las 32 competiciones que seleccionamos manualmente.
+- País y liga serán filtros de visualización, no una obligación de analizar una liga a la vez.
+- El Radar final separará partidos antes/después de 12:45 PM Costa Rica.
+- Solo calcularemos scores cuando exista histórico suficiente.
+- El score seguirá siendo un índice experimental y no una probabilidad calibrada.
 """)
