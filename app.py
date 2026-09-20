@@ -6,7 +6,7 @@ import streamlit as st
 
 from openfoot_client import OpenFoot
 from database import evaluations
-from config import TIMEZONE, TARGET_LEAGUES
+from config import TIMEZONE, TARGET_LEAGUES, KNOWN_COMPETITION_IDS
 
 st.set_page_config(page_title="Over 0.5 Analyzer", page_icon="⚽", layout="wide")
 st.title("⚽ Over 0.5 Goal Analyzer")
@@ -62,6 +62,72 @@ def competition_fields(c):
         country = country.get("name") or country.get("code") or ""
     return str(country), str(name)
 
+def norm(s):
+    import unicodedata
+    s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode().lower()
+    return "".join(ch if ch.isalnum() else " " for ch in s)
+
+COUNTRY_ALIASES = {
+    "USA": ["usa", "united states", "united states of america", "canada"],
+    "Czech Republic": ["czech republic", "czechia"],
+    "England": ["england"],
+    "Scotland": ["scotland"],
+}
+
+LEAGUE_ALIASES = {
+    "La Liga": ["la liga", "laliga", "primera division"],
+    "Liga 1": ["liga 1", "primera division"],
+    "MLS": ["mls", "major league soccer"],
+    "NB I": ["nb i", "otp bank liga"],
+    "Serie A": ["serie a"],
+    "2. Bundesliga": ["2 bundesliga", "2. bundesliga", "zweite bundesliga"],
+    "Pro League": ["pro league", "jupiler pro league"],
+}
+
+def resolve_competitions(comps):
+    resolved = {}
+    for target in TARGET_LEAGUES:
+        if target in KNOWN_COMPETITION_IDS:
+            resolved[target] = KNOWN_COMPETITION_IDS[target]
+            continue
+        country, league = target
+        countries = COUNTRY_ALIASES.get(country, [country])
+        leagues = LEAGUE_ALIASES.get(league, [league])
+        candidates = []
+        for c in comps:
+            cc, cn = competition_fields(c)
+            text_country, text_name = norm(cc), norm(cn)
+            country_ok = any(norm(x) in text_country or norm(x) in norm(f"{cc} {cn}") for x in countries)
+            league_ok = any(norm(x) in text_name for x in leagues)
+            if country_ok and league_ok:
+                cid = c.get("id") or c.get("competitionId")
+                if cid:
+                    candidates.append((cid, cn, cc))
+        if len(candidates) == 1:
+            resolved[target] = candidates[0][0]
+    return resolved
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_whitelist_matches(key, day):
+    d = date.fromisoformat(day)
+    api = OpenFoot(key)
+    comps = api.competitions()
+    mapping = resolve_competitions(comps)
+    rows, errors = [], []
+    # Query every resolved target competition on both UTC dates that can overlap the CR day.
+    for target, cid in mapping.items():
+        try:
+            for utc_day in (d.isoformat(), (d + timedelta(days=1)).isoformat()):
+                for m in api.matches_by_date(utc_day):
+                    if m.get("competitionId") == cid and m.get("kickoffAt"):
+                        if cr_time(m["kickoffAt"]).date() == d:
+                            m["_target"] = target
+                            rows.append(m)
+        except Exception as e:
+            errors.append((target, str(e)))
+    unique = {m.get("id", f"{m.get('competitionId')}-{m.get('kickoffAt')}"): m for m in rows}
+    return list(unique.values()), mapping, errors
+
 if not api_key:
     st.error("Falta OPENFOOT_API_KEY en Streamlit Secrets.")
     st.stop()
@@ -108,7 +174,7 @@ elif page == "Radar":
     morning_start, morning_end = time(3, 0), time(12, 0)
     afternoon_start, afternoon_end = time(12, 15), time(23, 30)
     try:
-        matches = get_matches_cr_day(api_key, d.isoformat())
+        matches, league_mapping, league_errors = get_whitelist_matches(api_key, d.isoformat())
     except Exception as e:
         st.error(f"No se pudieron cargar los partidos: {e}")
         st.stop()
@@ -123,6 +189,9 @@ elif page == "Radar":
         comp = m.get("competition") or {}
         comp_name = comp.get("name") if isinstance(comp, dict) else ""
         comp_name = comp_name or m.get("competitionName") or m.get("competitionId") or ""
+        target = m.get("_target")
+        if target:
+            comp_name = f"{target[0]} · {target[1]}"
         home = m.get("homeTeam") or {}
         away = m.get("awayTeam") or {}
         kickoff_raw = m.get("kickoffAt")
@@ -140,7 +209,10 @@ elif page == "Radar":
     else:
         df = pd.DataFrame(rows)
         df = df.sort_values("_dt", na_position="last")
-        st.write(f"**{len(df)} partidos para el día {d.isoformat()} en hora de Costa Rica**")
+        st.write(f"**{len(df)} partidos de nuestra whitelist para el día {d.isoformat()} en hora de Costa Rica**")
+        st.caption(f"Ligas resueltas: {len(league_mapping)}/{len(TARGET_LEAGUES)}")
+        if league_errors:
+            st.warning(f"{len(league_errors)} consultas de liga tuvieron error; revisa Diagnóstico OpenFoot.")
         morning = int(sum(morning_start <= x.time() <= morning_end for x in df["_dt"] if pd.notna(x)))
         afternoon = int(sum(afternoon_start <= x.time() <= afternoon_end for x in df["_dt"] if pd.notna(x)))
         outside = len(df) - morning - afternoon
@@ -153,6 +225,12 @@ elif page == "Radar":
         with st.expander("Diagnóstico OpenFoot"):
             st.caption("Esto nos permite comprobar si la consulta global está paginada, limitada o tiene competiciones no disponibles.")
             try:
+                st.write("**Mapeo de ligas**")
+                st.json({f"{k[0]} · {k[1]}": v for k, v in league_mapping.items()})
+                if league_errors:
+                    st.write("**Errores**")
+                    st.json({f"{k[0]} · {k[1]}": err for k, err in league_errors})
+                st.write("**Metadata consulta global (referencia)**")
                 st.json(get_match_meta(api_key, d.isoformat()))
             except Exception as e:
                 st.error(f"No se pudo leer la metadata: {e}")
