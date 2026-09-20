@@ -21,6 +21,17 @@ with st.sidebar:
 def get_competitions(key):
     return OpenFoot(key).competitions()
 
+@st.cache_data(ttl=300, show_spinner=False)
+def get_match_meta(key, day):
+    d = date.fromisoformat(day)
+    api = OpenFoot(key)
+    a = api.matches_envelope(date=d.isoformat())
+    b = api.matches_envelope(date=(d + timedelta(days=1)).isoformat())
+    return {
+        d.isoformat(): a.get("meta", {}),
+        (d + timedelta(days=1)).isoformat(): b.get("meta", {}),
+    }
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_matches_cr_day(key, day):
     # OpenFoot filters "date" in UTC. A Costa Rica calendar day spans two UTC dates.
@@ -139,6 +150,12 @@ elif page == "Radar":
         c.metric("Tarde · 12:15 PM–11:30 PM", afternoon)
         dcol.metric("Fuera de tandas", outside)
         st.warning("Radar en modo de validación: todavía no asignamos Score +0.5 hasta fijar los IDs de nuestras ligas y cargar históricos.")
+        with st.expander("Diagnóstico OpenFoot"):
+            st.caption("Esto nos permite comprobar si la consulta global está paginada, limitada o tiene competiciones no disponibles.")
+            try:
+                st.json(get_match_meta(api_key, d.isoformat()))
+            except Exception as e:
+                st.error(f"No se pudo leer la metadata: {e}")
         view = st.radio("Tanda", ["Todos", "Mañana", "Tarde", "Fuera de tandas"], horizontal=True)
         in_morning = df["_dt"].apply(lambda x: morning_start <= x.time() <= morning_end if pd.notna(x) else False)
         in_afternoon = df["_dt"].apply(lambda x: afternoon_start <= x.time() <= afternoon_end if pd.notna(x) else False)
