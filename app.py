@@ -234,6 +234,15 @@ elif page == "Radar":
         st.info(f"{provider} no devolvió partidos para esta fecha con los filtros actuales.")
         if provider.startswith("TheSportsDB"):
             st.caption("La prueba gratuita de TheSportsDB tiene datos/endpoints limitados. Esto no significa que Premium carezca de partidos; primero estamos validando la conexión y la respuesta del endpoint.")
+            st.subheader("Diagnóstico · TheSportsDB")
+            st.write(f"**Eventos recibidos antes del filtro de estado: {len(raw)}**")
+            st.write(f"Fecha consultada: {d.isoformat()}")
+            st.write(f"Estado seleccionado: {status_filter}")
+            if raw:
+                st.write("Muestra de la respuesta:")
+                st.json(raw[:3])
+            else:
+                st.warning("La API devolvió 0 eventos antes de que nuestra aplicación aplicara cualquier filtro.")
         else:
             st.caption("Revisa el diagnóstico de OpenFoot o prueba otro estado/fecha.")
     else:
