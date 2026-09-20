@@ -35,9 +35,9 @@ if page=="Próximos partidos":
             f=options[name]; home=f["teams"]["home"]; away=f["teams"]["away"]
             with st.expander(name, expanded=True):
                 try:
-                    hf=api.team_last(home["id"],15); af=api.team_last(away["id"],15)
+                    match_date=f["fixture"]["date"][:10]\n                    hf=api.team_recent_free(home["id"],match_date,limit=15); af=api.team_recent_free(away["id"],match_date,limit=15)
                     hs=summarize(hf,home["id"]); aas=summarize(af,away["id"])
-                    h2h=api.h2h(home["id"],away["id"],5)
+                    h2h=api.h2h_free(home["id"],away["id"],match_date,limit=5)
                     zz=sum(1 for x in h2h if x.get("goals",{}).get("home")==0 and x.get("goals",{}).get("away")==0)
                     score,label=rate(hs,aas,zz,len(h2h))
                     c1,c2,c3=st.columns(3); c1.metric("Score",f"{score}/100"); c2.metric("Clasificación",label); c3.metric("H2H 0-0",f"{zz}/{len(h2h)}")
