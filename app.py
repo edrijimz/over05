@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from openfoot_client import OpenFoot
+from thesportsdb_client import TheSportsDB
 from database import evaluations
 from config import TIMEZONE, TARGET_LEAGUES, KNOWN_COMPETITION_IDS
 
@@ -15,6 +16,7 @@ st.caption("Migración a OpenFoot · primero validamos cobertura antes de activa
 with st.sidebar:
     st.header("Configuración")
     api_key = st.secrets.get("OPENFOOT_API_KEY", "") if hasattr(st, "secrets") else ""
+    tsdb_key = st.secrets.get("THESPORTSDB_API_KEY", "123") if hasattr(st, "secrets") else "123"
     page = st.radio("Sección", ["Radar", "Cobertura", "Historial", "Metodología"])
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -177,11 +179,28 @@ if page == "Cobertura":
 
 elif page == "Radar":
     d = st.date_input("Fecha", date.today())
+    provider = st.selectbox("Proveedor de fixtures", ["TheSportsDB (prueba)", "OpenFoot"])
     status_filter = st.selectbox("Estado", ["Próximos / en vivo", "Todos", "Finalizados"])
     morning_start, morning_end = time(3, 0), time(12, 0)
     afternoon_start, afternoon_end = time(12, 15), time(23, 30)
+    league_mapping, league_errors = {}, []
     try:
-        matches, league_mapping, league_errors = get_whitelist_matches(api_key, d.isoformat())
+        if provider.startswith("TheSportsDB"):
+            raw = TheSportsDB(tsdb_key).events_day(d.isoformat(), "Soccer")
+            matches = []
+            for e in raw:
+                kickoff = f'{e.get("dateEvent", d.isoformat())}T{e.get("strTime") or "00:00:00"}+00:00'
+                matches.append({
+                    "id": e.get("idEvent"),
+                    "kickoffAt": kickoff,
+                    "competitionName": e.get("strLeague") or "",
+                    "competitionId": e.get("idLeague") or "",
+                    "homeTeam": {"name": e.get("strHomeTeam") or ""},
+                    "awayTeam": {"name": e.get("strAwayTeam") or ""},
+                    "status": "finished" if e.get("intHomeScore") is not None else "scheduled",
+                })
+        else:
+            matches, league_mapping, league_errors = get_whitelist_matches(api_key, d.isoformat())
     except Exception as e:
         st.error(f"No se pudieron cargar los partidos: {e}")
         st.stop()
@@ -216,8 +235,11 @@ elif page == "Radar":
     else:
         df = pd.DataFrame(rows)
         df = df.sort_values("_dt", na_position="last")
-        st.write(f"**{len(df)} partidos de nuestra whitelist para el día {d.isoformat()} en hora de Costa Rica**")
-        st.caption(f"Ligas resueltas: {len(league_mapping)}/{len(TARGET_LEAGUES)} · máximo una consulta por liga cada 30 min")
+        st.write(f"**{len(df)} partidos devueltos por {provider} para {d.isoformat()}**")
+        if provider == "OpenFoot":
+            st.caption(f"Ligas resueltas: {len(league_mapping)}/{len(TARGET_LEAGUES)} · máximo una consulta por liga cada 30 min")
+        else:
+            st.caption("Prueba de cobertura. Con la clave gratuita 123, Schedule Day está limitado a 3 eventos; Premium amplía este endpoint.")
         if league_errors:
             st.warning(f"{len(league_errors)} consultas de liga tuvieron error; revisa Diagnóstico OpenFoot.")
         morning = int(sum(morning_start <= x.time() <= morning_end for x in df["_dt"] if pd.notna(x)))
