@@ -93,8 +93,9 @@ if page == "Cobertura":
 
 elif page == "Radar":
     d = st.date_input("Fecha", date.today())
-    cutoff = st.time_input("Corte horario CR", time(12, 45))
     status_filter = st.selectbox("Estado", ["Próximos / en vivo", "Todos", "Finalizados"])
+    morning_start, morning_end = time(3, 0), time(12, 0)
+    afternoon_start, afternoon_end = time(12, 15), time(23, 30)
     try:
         matches = get_matches_cr_day(api_key, d.isoformat())
     except Exception as e:
@@ -129,19 +130,26 @@ elif page == "Radar":
         df = pd.DataFrame(rows)
         df = df.sort_values("_dt", na_position="last")
         st.write(f"**{len(df)} partidos para el día {d.isoformat()} en hora de Costa Rica**")
-        before = int(sum(x.time() < cutoff for x in df["_dt"] if pd.notna(x)))
-        after = int(sum(x.time() >= cutoff for x in df["_dt"] if pd.notna(x)))
-        a, b, c = st.columns(3)
+        morning = int(sum(morning_start <= x.time() <= morning_end for x in df["_dt"] if pd.notna(x)))
+        afternoon = int(sum(afternoon_start <= x.time() <= afternoon_end for x in df["_dt"] if pd.notna(x)))
+        outside = len(df) - morning - afternoon
+        a, b, c, dcol = st.columns(4)
         a.metric("Mostrados", len(df))
-        b.metric("Antes del corte", before)
-        c.metric("Desde 12:45 PM", after)
+        b.metric("Mañana · 3:00 AM–12:00 PM", morning)
+        c.metric("Tarde · 12:15 PM–11:30 PM", afternoon)
+        dcol.metric("Fuera de tandas", outside)
         st.warning("Radar en modo de validación: todavía no asignamos Score +0.5 hasta fijar los IDs de nuestras ligas y cargar históricos.")
-        view = st.radio("Tanda", ["Todos", "Antes de 12:45", "Desde 12:45"], horizontal=True)
-        shown = df
-        if view == "Antes de 12:45":
-            shown = df[df["_dt"].apply(lambda x: x.time() < cutoff if pd.notna(x) else False)]
-        elif view == "Desde 12:45":
-            shown = df[df["_dt"].apply(lambda x: x.time() >= cutoff if pd.notna(x) else False)]
+        view = st.radio("Tanda", ["Todos", "Mañana", "Tarde", "Fuera de tandas"], horizontal=True)
+        in_morning = df["_dt"].apply(lambda x: morning_start <= x.time() <= morning_end if pd.notna(x) else False)
+        in_afternoon = df["_dt"].apply(lambda x: afternoon_start <= x.time() <= afternoon_end if pd.notna(x) else False)
+        if view == "Mañana":
+            shown = df[in_morning]
+        elif view == "Tarde":
+            shown = df[in_afternoon]
+        elif view == "Fuera de tandas":
+            shown = df[~(in_morning | in_afternoon)]
+        else:
+            shown = df[in_morning | in_afternoon]
         st.dataframe(shown.drop(columns=["_dt"]), use_container_width=True, hide_index=True)
 
 elif page == "Historial":
