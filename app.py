@@ -107,24 +107,31 @@ def resolve_competitions(comps):
             resolved[target] = candidates[0][0]
     return resolved
 
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def get_whitelist_matches(key, day):
+    # One request per resolved competition. OpenFoot's default match window covers
+    # today +/- 3 days, so we filter that response locally to the selected CR date.
+    # This keeps a 32-league refresh below Starter's 60 req/min limit.
     d = date.fromisoformat(day)
     api = OpenFoot(key)
     comps = api.competitions()
     mapping = resolve_competitions(comps)
     rows, errors = [], []
-    # Query every resolved target competition on both UTC dates that can overlap the CR day.
+
     for target, cid in mapping.items():
         try:
-            for utc_day in (d.isoformat(), (d + timedelta(days=1)).isoformat()):
-                for m in api.matches_by_date(utc_day):
-                    if m.get("competitionId") == cid and m.get("kickoffAt"):
-                        if cr_time(m["kickoffAt"]).date() == d:
-                            m["_target"] = target
-                            rows.append(m)
+            envelope = api.matches_envelope(competition=cid)
+            unavailable = envelope.get("meta", {}).get("unavailable")
+            if unavailable:
+                errors.append((target, f"No disponible: {unavailable}"))
+                continue
+            for m in envelope.get("data", []):
+                if m.get("kickoffAt") and cr_time(m["kickoffAt"]).date() == d:
+                    m["_target"] = target
+                    rows.append(m)
         except Exception as e:
             errors.append((target, str(e)))
+
     unique = {m.get("id", f"{m.get('competitionId')}-{m.get('kickoffAt')}"): m for m in rows}
     return list(unique.values()), mapping, errors
 
@@ -210,7 +217,7 @@ elif page == "Radar":
         df = pd.DataFrame(rows)
         df = df.sort_values("_dt", na_position="last")
         st.write(f"**{len(df)} partidos de nuestra whitelist para el día {d.isoformat()} en hora de Costa Rica**")
-        st.caption(f"Ligas resueltas: {len(league_mapping)}/{len(TARGET_LEAGUES)}")
+        st.caption(f"Ligas resueltas: {len(league_mapping)}/{len(TARGET_LEAGUES)} · máximo una consulta por liga cada 30 min")
         if league_errors:
             st.warning(f"{len(league_errors)} consultas de liga tuvieron error; revisa Diagnóstico OpenFoot.")
         morning = int(sum(morning_start <= x.time() <= morning_end for x in df["_dt"] if pd.notna(x)))
