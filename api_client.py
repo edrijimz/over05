@@ -20,27 +20,6 @@ class ApiFootball:
     def fixtures_by_date(self, date_str: str):
         return self._get("fixtures", date=date_str, timezone=TIMEZONE)
 
-    def team_recent(self, team_id: int, before_date: str, days: int = 240, limit: int = 15):
-        """Free-plan compatible replacement for the restricted ?last= parameter."""
-        end = date.fromisoformat(before_date) - timedelta(days=1)
-        start = end - timedelta(days=days)
-        rows = self._get(
-            "fixtures", team=team_id, from_=start.isoformat(), to=end.isoformat(),
-            timezone=TIMEZONE
-        )
-        # requests needs the literal API parameter 'from', not Python's reserved keyword.
-        if not rows:
-            rows = self._get("fixtures", team=team_id, **{
-                "from": start.isoformat(), "to": end.isoformat(), "timezone": TIMEZONE
-            })
-        finished = [
-            x for x in rows
-            if x.get("goals", {}).get("home") is not None
-            and x.get("goals", {}).get("away") is not None
-        ]
-        finished.sort(key=lambda x: x["fixture"]["date"], reverse=True)
-        return finished[:limit]
-
     def team_recent_free(self, team_id: int, before_date: str, days: int = 240, limit: int = 15):
         end = date.fromisoformat(before_date) - timedelta(days=1)
         start = end - timedelta(days=days)
