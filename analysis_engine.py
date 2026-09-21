@@ -25,22 +25,34 @@ def summarize(fixtures: list, team_id: int) -> TeamForm:
 
 
 def rate(home: TeamForm, away: TeamForm, h2h_zero_zero: int=0, h2h_n: int=0):
-    # Score estimates suitability for avoiding 0-0; it is NOT a calibrated probability.
-    n=max(home.matches+away.matches,1)
-    zz_rate=(home.zero_zero+away.zero_zero)/n
-    scoring=(home.scored+away.scored)/n
-    conceding=(home.conceded+away.conceded)/n
-    score=35*(1-min(zz_rate/0.25,1)) + 25*scoring + 20*conceding
-    score += 10*min((home.avg_total_goals+away.avg_total_goals)/5,1)
-    if h2h_n: score += 5*(1-h2h_zero_zero/h2h_n)
-    score += 5*max(home.scored/max(home.matches,1), away.scored/max(away.matches,1))
-    score=max(0,min(round(score,1),100))
-    if score >= 88: label="🟢🟢 Muy fuerte"
-    elif score >= 78: label="🟢 Fuerte"
-    elif score >= 65: label="🟡 Revisar"
-    else: label="🔴 Descartar"
-    return score,label
+    # Suitability for Over 0.5: focus on avoiding 0-0, not on both teams scoring.
+    if home.matches < 5 or away.matches < 5:
+        return None, "⚪ Datos insuficientes"
+    n = home.matches + away.matches
+    zz_rate = (home.zero_zero + away.zero_zero) / n
+    home_score_rate = home.scored / home.matches
+    away_score_rate = away.scored / away.matches
+    best_cover = max(home_score_rate, away_score_rate)
+    at_least_one_model = 1 - ((1-home_score_rate) * (1-away_score_rate))
+    concede_support = max(home.conceded/home.matches, away.conceded/away.matches)
 
+    score = 45 * (1 - min(zz_rate / 0.25, 1))
+    score += 25 * at_least_one_model
+    score += 15 * best_cover
+    score += 10 * concede_support
+    if h2h_n >= 3:
+        score += 5 * (1 - h2h_zero_zero / h2h_n)
+    score = max(0, min(round(score, 1), 100))
+
+    if score >= 88:
+        label = "🟢🟢 Muy fuerte"
+    elif score >= 78:
+        label = "🟢 Fuerte"
+    elif score >= 65:
+        label = "🟡 Revisar"
+    else:
+        label = "🔴 Descartar"
+    return score, label
 
 def summarize_tsdb(events: list, team_id: str, limit: int = 10) -> TeamForm:
     rows = []
