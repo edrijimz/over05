@@ -28,6 +28,10 @@ TSDB_KNOWN_LEAGUE_IDS = {
     ("USA", "MLS"): "4346",
     ("Brazil", "Serie A"): "4351",
     ("Argentina", "Liga Profesional"): "4406",
+    # National-team competitions
+    ("International", "World Cup Qualifying CONMEBOL"): "5515",
+    ("International", "World Cup Qualifying CONCACAF"): "5516",
+    ("International", "World Cup Qualifying UEFA"): "5518",
 }
 
 TSDB_TARGET_ALIASES = {
@@ -72,6 +76,8 @@ TSDB_EXTRA_COMPETITION_ALIASES = [
     "Copa Libertadores", "Copa Sudamericana", "Recopa Sudamericana",
     "CONCACAF Champions Cup", "CONCACAF Central American Cup",
     "UEFA Nations League", "UEFA European Championship",
+    "World Cup Qualifying UEFA", "World Cup Qualifying CONMEBOL",
+    "World Cup Qualifying CONCACAF",
     "Copa America", "CONCACAF Gold Cup", "CONCACAF Nations League",
 ]
 
