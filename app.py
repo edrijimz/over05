@@ -221,22 +221,13 @@ elif page == "Radar":
             tsdb_mapping = get_tsdb_whitelist(tsdb_key)
             allowed_ids = set(tsdb_mapping.values())
 
-            # Schedule League Next only returns the next 20 events on Premium,
-            # so it is NOT suitable for an arbitrary selected date across many
-            # competitions. Restore Schedule Day as the base universe, then
-            # supplement it with direct league queries for verified competitions.
+            # Stable Radar: two bulk Schedule Day requests cover one full
+            # Costa Rica calendar day across the UTC boundary. Keep the app
+            # lightweight and avoid per-league calls/rate-limit problems.
             raw_all = (
                 api_tsdb.events_day(d.isoformat(), "Soccer")
                 + api_tsdb.events_day((d + timedelta(days=1)).isoformat(), "Soccer")
             )
-            league_sync_errors = []
-            for target, league_id in tsdb_mapping.items():
-                try:
-                    raw_all += api_tsdb.events_day(d.isoformat(), "Soccer", league_id)
-                    raw_all += api_tsdb.events_day((d + timedelta(days=1)).isoformat(), "Soccer", league_id)
-                except Exception as exc:
-                    league_sync_errors.append((target, league_id, str(exc)))
-
             raw_all = list({
                 str(e.get("idEvent")): e
                 for e in raw_all
@@ -344,7 +335,7 @@ elif page == "Radar":
         if provider == "OpenFoot":
             st.caption(f"Ligas resueltas: {len(league_mapping)}/{len(TARGET_LEAGUES)} · máximo una consulta por liga cada 30 min")
         else:
-            st.caption(f"TheSportsDB Premium · Schedule Day + refuerzo por competición · {len(tsdb_mapping)} competiciones resueltas")
+            st.caption(f"TheSportsDB Premium · whitelist activa · {len(tsdb_mapping)} competiciones resueltas")
         if league_errors:
             st.warning(f"{len(league_errors)} consultas de liga tuvieron error; revisa Diagnóstico OpenFoot.")
         morning = int(sum(morning_start <= x.time() <= morning_end for x in df["_dt"] if pd.notna(x)))
