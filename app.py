@@ -151,55 +151,35 @@ def get_h2h_tsdb(key, home_name, away_name):
         return []
 
 @st.cache_data(ttl=300, show_spinner=False)
-def get_oddschecker_over05(day):
-    """Lee Oddschecker Accumulator para la fecha del Radar y mercado O/U 0.5."""
-    base = "https://www.oddschecker.com/football/accumulator"
+def get_oddschecker_over05():
+    """Fallback estable: cupón público específico O/U 0.5 de Oddschecker."""
+    url = "https://www.oddschecker.com/football/over-under-0.5"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153 Safari/537.36",
         "Accept-Language": "en-GB,en;q=0.9",
     }
-    # Oddschecker uses its own date navigation. Try common public date query
-    # variants, keeping the plain accumulator as a final fallback.
-    urls = [
-        f"{base}?date={day}",
-        f"{base}?day={day}",
-        base,
-    ]
-    import re
-    diagnostics = []
-    for url in urls:
-        try:
-            r = requests.get(url, headers=headers, timeout=12)
-            r.raise_for_status()
-            soup = BeautifulSoup(r.text, "html.parser")
-            page_text = " ".join(soup.stripped_strings)
-            diagnostics.append({"url": url, "chars": len(r.text), "ou05": "Over/Under 0.5 Goals" in page_text})
-
-            # Find compact containers around fixtures. Accumulator renders the
-            # active market's two prices (over/under) beside each fixture.
-            found, seen = [], set()
-            for tag in soup.find_all(["tr", "li", "div", "section", "article"]):
-                txt = " ".join(tag.stripped_strings)
-                if len(txt) > 320 or not re.search(r"\d{1,2}:\d{2}", txt):
-                    continue
-                prices = re.findall(r"(?<!\d)(\d{1,3})\s*/\s*(\d{1,3})(?!\d)", txt)
-                if len(prices) < 2:
-                    continue
-                # Try explicit "A v B"; accumulator sometimes omits the visible v.
-                m = re.search(r"\d{1,2}:\d{2}\s+(?:TV\s+)?(.+?)\s+v\s+(.+?)(?=\s+\d{1,3}\s*/\s*\d{1,3})", txt, re.I)
-                if not m:
-                    continue
-                home, away = m.group(1).strip(), m.group(2).strip()
-                num, den = map(int, prices[0])
-                key = (norm(home), norm(away))
-                if den and key not in seen:
-                    seen.add(key)
-                    found.append({"home": home, "away": away, "odds": round(1 + num / den, 3), "source": "Accumulator"})
-            if found:
-                return found, None, diagnostics
-        except Exception as e:
-            diagnostics.append({"url": url, "error": str(e)})
-    return [], None, diagnostics
+    try:
+        r = requests.get(url, headers=headers, timeout=12)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        import re
+        found, seen = [], set()
+        text = " ".join(soup.stripped_strings)
+        pattern = re.compile(
+            r"(\d{1,2}:\d{2})\s+(?:TV\s+)?(.{2,80}?)\s+v\s+(.{2,80}?)\s+"
+            r"(\d{1,3})\s*/\s*(\d{1,3})\s+(\d{1,3})\s*/\s*(\d{1,3})",
+            re.I,
+        )
+        for m in pattern.finditer(text):
+            home, away = m.group(2).strip(), m.group(3).strip()
+            num, den = int(m.group(4)), int(m.group(5))
+            key = (norm(home), norm(away))
+            if den and key not in seen:
+                seen.add(key)
+                found.append({"home": home, "away": away, "odds": round(1 + num / den, 3)})
+        return found, None
+    except Exception as e:
+        return [], str(e)
 
 def match_reference_odd(home, away, odds_rows):
     def tokens(name):
@@ -374,7 +354,7 @@ elif page == "Radar":
     # El Radar solo muestra partidos que todavía no comenzaron.
     matches = [m for m in matches if m.get("status") == "scheduled"]
 
-    odds_rows, odds_error, odds_diag = get_oddschecker_over05(d.isoformat())
+    odds_rows, odds_error = get_oddschecker_over05()
 
     rows = []
     for m in matches:
