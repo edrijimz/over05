@@ -6,7 +6,7 @@ import streamlit as st
 
 from openfoot_client import OpenFoot
 from thesportsdb_client import TheSportsDB
-from database import evaluations
+from database import evaluations, save_experiment, update_result, ensure_experiment_schema
 from analysis_engine import summarize_tsdb, rate, venue_split_tsdb, summarize_h2h_tsdb, poisson_over05, risk_level
 from config import TIMEZONE, TARGET_LEAGUES, KNOWN_COMPETITION_IDS, TSDB_TARGET_ALIASES, TSDB_EXTRA_COMPETITION_ALIASES, TSDB_KNOWN_LEAGUE_IDS
 
@@ -18,7 +18,7 @@ with st.sidebar:
     st.header("Configuración")
     api_key = st.secrets.get("OPENFOOT_API_KEY", "") if hasattr(st, "secrets") else ""
     tsdb_key = st.secrets.get("THESPORTSDB_API_KEY", "123") if hasattr(st, "secrets") else "123"
-    page = st.radio("Sección", ["Radar", "Cobertura", "Historial", "Metodología"])
+    page = st.radio("Sección", ["Radar", "Experimento", "Cobertura", "Historial", "Metodología"])
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_competitions(key):
@@ -361,6 +361,15 @@ elif page == "Radar":
             "Riesgo": risk_label,
             "_risk_score": risk_score,
             "_risk_reasons": tuple(risk_reasons),
+            "_fixture_id": m.get("id"),
+            "_kickoff_raw": kickoff_raw,
+            "_home": home.get("name",""),
+            "_away": away.get("name",""),
+            "_home_zz": home_form.zero_zero if home_form else None,
+            "_home_n": home_form.matches if home_form else None,
+            "_away_zz": away_form.zero_zero if away_form else None,
+            "_away_n": away_form.matches if away_form else None,
+            "_model_p_num": model_p,
             "Estado": analysis_label,
             "_home_scores": home_form.scores if home_form else (),
             "_away_scores": away_form.scores if away_form else (),
@@ -475,7 +484,21 @@ elif page == "Radar":
             shown = shown[shown["Riesgo"].isin(risk_filter)]
         visible_cols = ["Hora CR", "Competición", "Partido", "0-0 Local", "0-0 Visit.", "Marca ≥1", "Recibe ≥1", "Casa/Fuera 0-0", "H2H 0-0", "P(+0.5) modelo", "Score +0.5", "Riesgo", "Estado"]
         st.dataframe(shown[visible_cols], use_container_width=True, hide_index=True)
-        st.subheader("Detalle de los datos usados")
+        st.subheader("Experimento")
+        st.caption("Guarda una fotografía prepartido de los análisis visibles. El resultado podrá completarse después sin cambiar el Score original.")
+        if st.button("Guardar análisis visibles", type="primary"):
+            saved = 0
+            for _, erow in shown.iterrows():
+                if erow["_fixture_id"] and erow["Score +0.5"] != "—":
+                    save_experiment((
+                        int(erow["_fixture_id"]), erow["_kickoff_raw"], erow["Competición"], erow["_home"], erow["_away"],
+                        float(erow["Score +0.5"]), erow["Estado"], "Analizado", erow["Riesgo"], float(erow["_risk_score"]),
+                        float(erow["_model_p_num"]) if erow["_model_p_num"] is not None else None,
+                        erow["_home_zz"], erow["_home_n"], erow["_away_zz"], erow["_away_n"], "Pendiente"
+                    ))
+                    saved += 1
+            st.success(f"{saved} evaluaciones prepartido guardadas.")
+                st.subheader("Detalle de los datos usados")
         for _, row in shown.iterrows():
             with st.expander(str(row["Partido"]) + " · " + str(row["Estado"])):
                 st.write("**Riesgo +0.5:** " + str(row["Riesgo"]) + " · índice de riesgo " + str(row["_risk_score"]) + "/100")
@@ -494,6 +517,33 @@ elif page == "Radar":
                         st.write("\n".join("• " + x for x in row["_away_scores"]))
                     else:
                         st.caption("Sin histórico suficiente.")
+
+elif page == "Experimento":
+    ensure_experiment_schema()
+    cols, saved_rows = evaluations()
+    exp = pd.DataFrame(saved_rows, columns=cols)
+    st.subheader("Experimento +0.5")
+    if exp.empty:
+        st.info("Todavía no hay evaluaciones guardadas. Usa 'Guardar análisis visibles' en el Radar.")
+    else:
+        completed = exp[exp["over05"].notna()] if "over05" in exp.columns else pd.DataFrame()
+        a,b,c1,c2 = st.columns(4)
+        a.metric("Evaluaciones", len(exp))
+        b.metric("Finalizadas", len(completed))
+        if not completed.empty:
+            hits = int(completed["over05"].sum())
+            c1.metric("+0.5", hits)
+            c2.metric("Acierto observado", f"{100*hits/len(completed):.1f}%")
+        else:
+            c1.metric("+0.5", 0); c2.metric("Acierto observado", "—")
+        show_cols=[x for x in ["kickoff","league","home","away","score","label","risk","risk_score","model_p","final_score","over05","result_status"] if x in exp.columns]
+        st.dataframe(exp[show_cols], use_container_width=True, hide_index=True)
+        if not completed.empty:
+            st.subheader("Rendimiento por estado")
+            perf=completed.groupby("label")["over05"].agg(["count","sum"]).reset_index()
+            perf["Acierto %"]=(100*perf["sum"]/perf["count"]).round(1)
+            perf.columns=["Estado","Partidos","+0.5","Acierto %"]
+            st.dataframe(perf,use_container_width=True,hide_index=True)
 
 elif page == "Historial":
     cols, rows = evaluations()
