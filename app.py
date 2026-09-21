@@ -109,6 +109,31 @@ def resolve_competitions(comps):
             resolved[target] = candidates[0][0]
     return resolved
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_tsdb_whitelist(key):
+    api = TheSportsDB(key)
+    leagues = api.all_leagues()
+
+    def clean(value):
+        import unicodedata
+        value = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode().lower()
+        return " ".join(value.replace("-", " ").replace("_", " ").split())
+
+    wanted = list(TSDB_TARGET_ALIASES.items())
+    wanted += [(("International", alias), [alias]) for alias in TSDB_EXTRA_COMPETITION_ALIASES]
+
+    resolved = {}
+    for target, aliases in wanted:
+        alias_set = {clean(a) for a in aliases}
+        for league in leagues:
+            if clean(league.get("strSport")) != "soccer":
+                continue
+            if clean(league.get("strLeague")) in alias_set or clean(league.get("strLeagueAlternate")) in alias_set:
+                if league.get("idLeague"):
+                    resolved[target] = str(league["idLeague"])
+                    break
+    return resolved
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_whitelist_matches(key, day):
     # One request per resolved competition. OpenFoot's default match window covers
