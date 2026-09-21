@@ -171,7 +171,7 @@ def get_oddschecker_over05(day, competition_names=()):
         discovery = {"league_links": 0, "league_pages_checked": 0, "extra_cards": []}
         try:
             directory_url = "https://www.oddschecker.com/football/leagues-cups"
-            dr = requests.get(directory_url, headers=headers, timeout=15)
+            dr = requests.get(directory_url, headers=headers, timeout=8)
             dr.raise_for_status()
             dsoup = BeautifulSoup(dr.text, "html.parser")
             links = []
@@ -205,17 +205,20 @@ def get_oddschecker_over05(day, competition_names=()):
                     if score > best_score:
                         best, best_score = (label, href), score
                 if best and best_score >= 0.45:
-                    chosen.append(best)
+                    chosen.append((best_score, best[0], best[1]))
 
             # Fetch only leagues actually present in today's Radar.
             seen_urls = set()
             import re
-            for label, href in chosen:
+            # Avoid one HTTP request per Radar competition. The Accumulator
+            # already covers many leagues; cap discovery pages to keep reloads fast.
+            chosen = sorted(chosen, reverse=True)[:8]
+            for _score, label, href in chosen:
                 full = href if href.startswith("http") else "https://www.oddschecker.com" + href
                 if full in seen_urls:
                     continue
                 seen_urls.add(full)
-                lr = requests.get(full, headers=headers, timeout=15)
+                lr = requests.get(full, headers=headers, timeout=6)
                 if not lr.ok:
                     continue
                 discovery["league_pages_checked"] += 1
@@ -242,7 +245,7 @@ def get_oddschecker_over05(day, competition_names=()):
                 f"{cards}/marketTemplate/9/loadDataFor/3/forDate/{day}/andDays/1"
             )
 
-        r = requests.get(url, headers=headers, timeout=20)
+        r = requests.get(url, headers=headers, timeout=12)
         r.raise_for_status()
         data = r.json()
 
