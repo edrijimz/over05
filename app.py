@@ -163,13 +163,13 @@ def get_oddschecker_over05():
         import re
         for tr in soup.find_all("tr"):
             txt = " ".join(tr.stripped_strings)
-            prices = re.findall(r"(?<!\\d)(\\d{1,3})\\s*/\\s*(\\d{1,3})(?!\\d)", txt)
+            prices = re.findall(r"(?<!\d)(\d{1,3})\s*/\s*(\d{1,3})(?!\d)", txt)
             if not prices:
                 continue
-            m = re.search(r"(.+?)\\s+(?:v|vs|–|-)\\s+(.+?)(?=\\s+\\d{1,3}\\s*/\\s*\\d{1,3})", txt, re.I)
+            m = re.search(r"(.+?)\s+(?:v|vs|–|-)\s+(.+?)(?=\s+\d{1,3}\s*/\s*\d{1,3})", txt, re.I)
             if not m:
                 continue
-            home = re.sub(r"^.*?\\b(?:AM|PM)\\b\\s*", "", m.group(1), flags=re.I).strip()
+            home = re.sub(r"^.*?\b(?:AM|PM)\b\s*", "", m.group(1), flags=re.I).strip()
             away = m.group(2).strip()
             num, den = map(int, prices[0])
             if den:
