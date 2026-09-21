@@ -7,7 +7,7 @@ import streamlit as st
 from openfoot_client import OpenFoot
 from thesportsdb_client import TheSportsDB
 from database import evaluations
-from analysis_engine import summarize_tsdb, rate
+from analysis_engine import summarize_tsdb, rate, venue_split_tsdb, summarize_h2h_tsdb, poisson_over05
 from config import TIMEZONE, TARGET_LEAGUES, KNOWN_COMPETITION_IDS, TSDB_TARGET_ALIASES, TSDB_EXTRA_COMPETITION_ALIASES, TSDB_KNOWN_LEAGUE_IDS
 
 st.set_page_config(page_title="Over 0.5 Analyzer", page_icon="⚽", layout="wide")
@@ -136,6 +136,17 @@ def get_tsdb_whitelist(key):
                     resolved[target] = str(league["idLeague"])
                     break
     return resolved
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_team_form_tsdb(key, team_id):
+    return TheSportsDB(key).team_last_events(str(team_id))
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_h2h_tsdb(key, home_name, away_name):
+    try:
+        return TheSportsDB(key).h2h(home_name, away_name)
+    except Exception:
+        return []
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_whitelist_matches(key, day):
@@ -308,16 +319,25 @@ elif page == "Radar":
         kickoff_raw = m.get("kickoffAt")
         kickoff = cr_time(kickoff_raw) if kickoff_raw else None
         analysis_score, analysis_label = None, "⚪ Pendiente"
-        home_form = away_form = None
+        home_form = away_form = home_venue = away_venue = None
+        h2h_n = h2h_zz = 0
+        model_p = None
         if provider.startswith("TheSportsDB") and m.get("_raw"):
             event = m["_raw"]
             home_id, away_id = event.get("idHomeTeam"), event.get("idAwayTeam")
             if home_id and away_id:
                 try:
-                    home_form = summarize_tsdb(api_tsdb.team_last_events(str(home_id)), str(home_id), 10)
-                    away_form = summarize_tsdb(api_tsdb.team_last_events(str(away_id)), str(away_id), 10)
+                    home_events = get_team_form_tsdb(tsdb_key, str(home_id))
+                    away_events = get_team_form_tsdb(tsdb_key, str(away_id))
+                    home_form = summarize_tsdb(home_events, str(home_id), 10)
+                    away_form = summarize_tsdb(away_events, str(away_id), 10)
+                    home_venue = venue_split_tsdb(home_events, str(home_id), "home", 10)
+                    away_venue = venue_split_tsdb(away_events, str(away_id), "away", 10)
+                    h2h_events = get_h2h_tsdb(tsdb_key, event.get("strHomeTeam") or "", event.get("strAwayTeam") or "")
+                    h2h_n, h2h_zz = summarize_h2h_tsdb(h2h_events, 5)
+                    model_p = poisson_over05(home_form, away_form)
                     if home_form.matches >= 5 and away_form.matches >= 5:
-                        analysis_score, analysis_label = rate(home_form, away_form)
+                        analysis_score, analysis_label = rate(home_form, away_form, h2h_zz, h2h_n)
                     else:
                         analysis_label = "⚪ Datos insuficientes"
                 except Exception:
@@ -332,6 +352,9 @@ elif page == "Radar":
             "0-0 Visit.": f"{away_form.zero_zero}/{away_form.matches}" if away_form else "—",
             "Marca ≥1": (f"{round(100*home_form.scored/home_form.matches)}% / {round(100*away_form.scored/away_form.matches)}%" if home_form and away_form and home_form.matches and away_form.matches else "—"),
             "Recibe ≥1": (f"{round(100*home_form.conceded/home_form.matches)}% / {round(100*away_form.conceded/away_form.matches)}%" if home_form and away_form and home_form.matches and away_form.matches else "—"),
+            "Casa/Fuera 0-0": (f"{home_venue.zero_zero}/{home_venue.matches} · {away_venue.zero_zero}/{away_venue.matches}" if home_venue and away_venue else "—"),
+            "H2H 0-0": f"{h2h_zz}/{h2h_n}" if h2h_n else "—",
+            "P(+0.5) modelo": f"{model_p}%" if model_p is not None else "—",
             "Score +0.5": analysis_score if analysis_score is not None else "—",
             "Estado": analysis_label,
             "_home_scores": home_form.scores if home_form else (),
@@ -434,7 +457,7 @@ elif page == "Radar":
             shown = df[~(in_morning | in_afternoon)]
         else:
             shown = df
-        visible_cols = ["Hora CR", "Competición", "Partido", "0-0 Local", "0-0 Visit.", "Marca ≥1", "Recibe ≥1", "Score +0.5", "Estado"]
+        visible_cols = ["Hora CR", "Competición", "Partido", "0-0 Local", "0-0 Visit.", "Marca ≥1", "Recibe ≥1", "Casa/Fuera 0-0", "H2H 0-0", "P(+0.5) modelo", "Score +0.5", "Estado"]
         st.dataframe(shown[visible_cols], use_container_width=True, hide_index=True)
         st.subheader("Detalle de los datos usados")
         for _, row in shown.iterrows():
