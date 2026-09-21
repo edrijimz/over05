@@ -28,3 +28,6 @@ class TheSportsDB:
 
     def season_events(self, league_id: str, season: str):
         return self._get("eventsseason.php", id=str(league_id), s=season).get("events") or []
+
+    def next_league_events(self, league_id: str):
+        return self._get("eventsnextleague.php", id=str(league_id)).get("events") or []
