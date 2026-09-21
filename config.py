@@ -33,6 +33,7 @@ TSDB_KNOWN_LEAGUE_IDS = {
     ("International", "World Cup Qualifying CONCACAF"): "5516",
     ("International", "World Cup Qualifying UEFA"): "5518",
     ("International", "CONCACAF Nations League"): "5280",
+    ("International", "UEFA Womens Champions League"): "4889",
 }
 
 TSDB_TARGET_ALIASES = {
@@ -73,7 +74,7 @@ TSDB_TARGET_ALIASES = {
 # International competitions approved for the radar. More national cups will be
 # added by canonical ID as we validate them.
 TSDB_EXTRA_COMPETITION_ALIASES = [
-    "UEFA Champions League", "UEFA Women's Champions League", "UEFA Europa League", "UEFA Europa Conference League",
+    "UEFA Champions League", "UEFA Womens Champions League", "UEFA Women's Champions League", "UEFA Europa League", "UEFA Europa Conference League",
     "Copa Libertadores", "Copa Sudamericana", "Recopa Sudamericana",
     "CONCACAF Champions Cup", "CONCACAF Central American Cup",
     "UEFA Nations League", "UEFA European Championship",
