@@ -11,7 +11,7 @@ from config import TIMEZONE, TARGET_LEAGUES, KNOWN_COMPETITION_IDS, TSDB_TARGET_
 
 st.set_page_config(page_title="Over 0.5 Analyzer", page_icon="⚽", layout="wide")
 st.title("⚽ Over 0.5 Goal Analyzer")
-st.caption("Migración a OpenFoot · primero validamos cobertura antes de activar el radar completo.")
+st.caption("TheSportsDB Premium · horarios mostrados en hora de Costa Rica (UTC−6).")
 
 with st.sidebar:
     st.header("Configuración")
@@ -203,7 +203,8 @@ if page == "Cobertura":
         st.error(f"No se pudo consultar OpenFoot: {e}")
 
 elif page == "Radar":
-    d = st.date_input("Fecha", date.today())
+    today_cr = datetime.now(ZoneInfo(TIMEZONE)).date()
+    d = st.date_input("Fecha", today_cr)
     provider = st.selectbox("Proveedor de fixtures", ["TheSportsDB (prueba)", "OpenFoot"])
     status_filter = "Programados"
     morning_start, morning_end = time(3, 0), time(12, 0)
@@ -235,10 +236,12 @@ elif page == "Radar":
                 # events remain useful for history but never appear here.
                 if status != "scheduled":
                     continue
-                stamp = e.get("strTimestamp")
-                kickoff = f"{stamp}+00:00" if stamp and "+" not in stamp and not stamp.endswith("Z") else stamp
-                if not kickoff:
-                    kickoff = f'{e.get("dateEvent", d.isoformat())}T{e.get("strTime") or "00:00:00"}+00:00'
+                # TheSportsDB exposes both UTC (dateEvent/strTime) and local
+                # event fields. For consistent Costa Rica conversion we use the
+                # UTC date/time fields and attach UTC explicitly.
+                event_date = e.get("dateEvent") or d.isoformat()
+                event_time = e.get("strTime") or "00:00:00"
+                kickoff = f"{event_date}T{event_time}+00:00"
                 matches.append({
                     "id": e.get("idEvent"),
                     "kickoffAt": kickoff,
