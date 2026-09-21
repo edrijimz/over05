@@ -7,7 +7,7 @@ import streamlit as st
 from openfoot_client import OpenFoot
 from thesportsdb_client import TheSportsDB
 from database import evaluations
-from config import TIMEZONE, TARGET_LEAGUES, KNOWN_COMPETITION_IDS, TSDB_TARGET_ALIASES, TSDB_EXTRA_COMPETITION_ALIASES
+from config import TIMEZONE, TARGET_LEAGUES, KNOWN_COMPETITION_IDS, TSDB_TARGET_ALIASES, TSDB_EXTRA_COMPETITION_ALIASES, TSDB_KNOWN_LEAGUE_IDS
 
 st.set_page_config(page_title="Over 0.5 Analyzer", page_icon="⚽", layout="wide")
 st.title("⚽ Over 0.5 Goal Analyzer")
@@ -122,8 +122,10 @@ def get_tsdb_whitelist(key):
     wanted = list(TSDB_TARGET_ALIASES.items())
     wanted += [(("International", alias), [alias]) for alias in TSDB_EXTRA_COMPETITION_ALIASES]
 
-    resolved = {}
+    resolved = dict(TSDB_KNOWN_LEAGUE_IDS)
     for target, aliases in wanted:
+        if target in resolved:
+            continue
         alias_set = {clean(a) for a in aliases}
         for league in leagues:
             if clean(league.get("strSport")) != "soccer":
