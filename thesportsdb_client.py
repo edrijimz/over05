@@ -31,3 +31,6 @@ class TheSportsDB:
 
     def next_league_events(self, league_id: str):
         return self._get("eventsnextleague.php", id=str(league_id)).get("events") or []
+
+    def team_last_events(self, team_id: str):
+        return self._get("eventslast.php", id=str(team_id)).get("results") or []
