@@ -225,12 +225,20 @@ elif page == "Radar":
             # requests are enough for one Costa Rica calendar day (which spans
             # parts of two UTC dates). Filtering per league here would create
             # 60+ requests per refresh and can trigger HTTP 429.
-            raw = (
+            raw_all = (
                 api_tsdb.events_day(d.isoformat(), "Soccer")
                 + api_tsdb.events_day((d + timedelta(days=1)).isoformat(), "Soccer")
             )
-            raw = list({str(e.get("idEvent")): e for e in raw if e.get("idEvent")}.values())
-            raw = [e for e in raw if str(e.get("idLeague") or "") in allowed_ids]
+            raw_all = list({str(e.get("idEvent")): e for e in raw_all if e.get("idEvent")}.values())
+            international_terms = (
+                "concacaf", "conmebol", "nations league", "copa america",
+                "world cup qualifying", "international friendlies"
+            )
+            raw = [
+                e for e in raw_all
+                if str(e.get("idLeague") or "") in allowed_ids
+                or any(term in str(e.get("strLeague") or "").lower() for term in international_terms)
+            ]
 
             def tsdb_status(e):
                 s = str(e.get("strStatus") or "").upper().strip()
