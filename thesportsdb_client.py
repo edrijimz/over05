@@ -34,3 +34,10 @@ class TheSportsDB:
 
     def team_last_events(self, team_id: str):
         return self._get("eventslast.php", id=str(team_id)).get("results") or []
+
+    def team_search(self, name: str):
+        return self._get("searchteams.php", t=name).get("teams") or []
+
+    def h2h(self, team1: str, team2: str):
+        data = self._get("eventsh2h.php", h=team1, a=team2)
+        return data.get("results") or data.get("events") or []
