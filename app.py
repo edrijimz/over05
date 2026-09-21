@@ -7,7 +7,7 @@ import streamlit as st
 from openfoot_client import OpenFoot
 from thesportsdb_client import TheSportsDB
 from database import evaluations
-from config import TIMEZONE, TARGET_LEAGUES, KNOWN_COMPETITION_IDS
+from config import TIMEZONE, TARGET_LEAGUES, KNOWN_COMPETITION_IDS, TSDB_TARGET_ALIASES, TSDB_EXTRA_COMPETITION_ALIASES
 
 st.set_page_config(page_title="Over 0.5 Analyzer", page_icon="⚽", layout="wide")
 st.title("⚽ Over 0.5 Goal Analyzer")
@@ -180,16 +180,40 @@ if page == "Cobertura":
 elif page == "Radar":
     d = st.date_input("Fecha", date.today())
     provider = st.selectbox("Proveedor de fixtures", ["TheSportsDB (prueba)", "OpenFoot"])
-    status_filter = st.selectbox("Estado", ["Próximos / en vivo", "Todos", "Finalizados"])
+    status_filter = "Programados"
     morning_start, morning_end = time(3, 0), time(12, 0)
     afternoon_start, afternoon_end = time(12, 15), time(23, 30)
     league_mapping, league_errors = {}, []
     try:
         if provider.startswith("TheSportsDB"):
             raw = TheSportsDB(tsdb_key).events_day(d.isoformat(), "Soccer")
+            tsdb_mapping = get_tsdb_whitelist(tsdb_key)
+            allowed_ids = set(tsdb_mapping.values())
+            raw = [e for e in raw if str(e.get("idLeague") or "") in allowed_ids]
+
+            def tsdb_status(e):
+                s = str(e.get("strStatus") or "").upper().strip()
+                if s in {"NS", "TBD", "NOT STARTED", "SCHEDULED"} or not s:
+                    return "scheduled"
+                if s in {"1H", "HT", "2H", "ET", "BT", "P", "LIVE", "IN PLAY"}:
+                    return "live"
+                if s in {"FT", "AET", "PEN", "MATCH FINISHED"}:
+                    return "finished"
+                if s in {"PST", "CANC", "ABD", "SUSP", "AWD", "WO"}:
+                    return "inactive"
+                return "unknown"
+
             matches = []
             for e in raw:
-                kickoff = f'{e.get("dateEvent", d.isoformat())}T{e.get("strTime") or "00:00:00"}+00:00'
+                status = tsdb_status(e)
+                # Radar = pre-match only. Finished, live, postponed and cancelled
+                # events remain useful for history but never appear here.
+                if status != "scheduled":
+                    continue
+                stamp = e.get("strTimestamp")
+                kickoff = f"{stamp}+00:00" if stamp and "+" not in stamp and not stamp.endswith("Z") else stamp
+                if not kickoff:
+                    kickoff = f'{e.get("dateEvent", d.isoformat())}T{e.get("strTime") or "00:00:00"}+00:00'
                 matches.append({
                     "id": e.get("idEvent"),
                     "kickoffAt": kickoff,
@@ -197,7 +221,7 @@ elif page == "Radar":
                     "competitionId": e.get("idLeague") or "",
                     "homeTeam": {"name": e.get("strHomeTeam") or ""},
                     "awayTeam": {"name": e.get("strAwayTeam") or ""},
-                    "status": "finished" if e.get("intHomeScore") is not None else "scheduled",
+                    "status": status,
                 })
         else:
             matches, league_mapping, league_errors = get_whitelist_matches(api_key, d.isoformat())
@@ -205,10 +229,8 @@ elif page == "Radar":
         st.error(f"No se pudieron cargar los partidos: {e}")
         st.stop()
 
-    if status_filter == "Próximos / en vivo":
-        matches = [m for m in matches if m.get("status") in {"scheduled", "live", "unknown"}]
-    elif status_filter == "Finalizados":
-        matches = [m for m in matches if m.get("status") == "finished"]
+    # El Radar solo muestra partidos que todavía no comenzaron.
+    matches = [m for m in matches if m.get("status") == "scheduled"]
 
     rows = []
     for m in matches:
@@ -252,7 +274,7 @@ elif page == "Radar":
         if provider == "OpenFoot":
             st.caption(f"Ligas resueltas: {len(league_mapping)}/{len(TARGET_LEAGUES)} · máximo una consulta por liga cada 30 min")
         else:
-            st.caption("Prueba de cobertura. Con la clave gratuita 123, Schedule Day está limitado a 3 eventos; Premium amplía este endpoint.")
+            st.caption(f"TheSportsDB Premium · whitelist activa · {len(get_tsdb_whitelist(tsdb_key))} competiciones resueltas")
         if league_errors:
             st.warning(f"{len(league_errors)} consultas de liga tuvieron error; revisa Diagnóstico OpenFoot.")
         morning = int(sum(morning_start <= x.time() <= morning_end for x in df["_dt"] if pd.notna(x)))
@@ -293,7 +315,7 @@ elif page == "Radar":
         elif view == "Fuera de tandas":
             shown = df[~(in_morning | in_afternoon)]
         else:
-            shown = df[in_morning | in_afternoon]
+            shown = df
         st.dataframe(shown.drop(columns=["_dt"]), use_container_width=True, hide_index=True)
 
 elif page == "Historial":
