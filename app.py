@@ -259,12 +259,20 @@ elif page == "Radar":
                 # events remain useful for history but never appear here.
                 if status != "scheduled":
                     continue
-                # TheSportsDB exposes both UTC (dateEvent/strTime) and local
-                # event fields. For consistent Costa Rica conversion we use the
-                # UTC date/time fields and attach UTC explicitly.
-                event_date = e.get("dateEvent") or d.isoformat()
-                event_time = e.get("strTime") or "00:00:00"
-                kickoff = f"{event_date}T{event_time}+00:00"
+                # Prefer TheSportsDB's full timestamp. It is the safest
+                # source for timezone conversion. We already fetch two API dates,
+                # so evening CR fixtures that cross the UTC date boundary are kept.
+                stamp = e.get("strTimestamp")
+                if stamp:
+                    kickoff = stamp
+                    if kickoff.endswith("Z"):
+                        kickoff = kickoff[:-1] + "+00:00"
+                    elif "+" not in kickoff[10:] and "-" not in kickoff[10:]:
+                        kickoff = kickoff + "+00:00"
+                else:
+                    event_date = e.get("dateEvent") or d.isoformat()
+                    event_time = e.get("strTime") or "00:00:00"
+                    kickoff = f"{event_date}T{event_time}+00:00"
                 # Keep only events whose converted kickoff belongs to the
                 # selected Costa Rica calendar date.
                 if cr_time(kickoff).date() != d:
