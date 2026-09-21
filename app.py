@@ -561,6 +561,34 @@ elif page == "Radar":
                 api_tsdb.events_day(d.isoformat(), "Soccer")
                 + api_tsdb.events_day((d + timedelta(days=1)).isoformat(), "Soccer")
             )
+
+            # eventsday.php does not always expose every fixture from some
+            # competitions even when TSDB has those matches in the season
+            # schedule. UWCL is one confirmed example. Merge its season
+            # schedule before applying the whitelist/date filters.
+            uwcl_id = tsdb_mapping.get(("International", "UEFA Womens Champions League"))
+            if uwcl_id:
+                try:
+                    seasons = api_tsdb.seasons(str(uwcl_id))
+                    season_names = [
+                        str(s.get("strSeason") or s.get("season") or "")
+                        for s in seasons
+                        if (s.get("strSeason") or s.get("season"))
+                    ]
+                    # Prefer a season containing the selected year; the API
+                    # normally returns the current/relevant season first.
+                    selected_year = str(d.year)
+                    season_name = next(
+                        (s for s in season_names if selected_year in s),
+                        season_names[0] if season_names else None,
+                    )
+                    if season_name:
+                        raw_all += get_tsdb_season_events(
+                            tsdb_key, str(uwcl_id), season_name
+                        )
+                except Exception:
+                    pass
+
             raw_all = list({
                 str(e.get("idEvent")): e
                 for e in raw_all
