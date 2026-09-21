@@ -100,58 +100,79 @@ def poisson_over05(home: TeamForm, away: TeamForm):
 
 
 def risk_level(home: TeamForm, away: TeamForm, home_venue: TeamForm | None = None, away_venue: TeamForm | None = None, h2h_zero_zero: int = 0, h2h_n: int = 0):
+    # Risk answers one narrow question: how much evidence points to a 0-0?
+    # A team failing to score is not itself dangerous if the opponent regularly scores.
     if home.matches < 5 or away.matches < 5:
         return "⚪ Sin evaluar", 0, ["Histórico insuficiente"]
 
-    risk = 0
+    risk = 0.0
     reasons = []
-    total_n = home.matches + away.matches
+    n = home.matches + away.matches
     zz = home.zero_zero + away.zero_zero
-    no_score = (home.matches - home.scored) + (away.matches - away.scored)
+    zz_rate = zz / n
 
-    zz_rate = zz / total_n
-    no_score_rate = no_score / total_n
-    risk += min(35, round(zz_rate * 140))
-    risk += min(30, round(no_score_rate * 60))
-
+    # 1) Actual 0-0 frequency is the strongest signal.
+    risk += min(48, zz_rate * 160)
     if zz == 0:
-        reasons.append("Sin 0-0 en la forma general reciente")
+        reasons.append("Sin 0-0 recientes en la forma general")
     elif zz <= 2:
-        reasons.append("Pocos 0-0 recientes")
+        reasons.append("Frecuencia reciente de 0-0 baja")
     else:
-        reasons.append("Varios 0-0 recientes")
+        reasons.append("Patrón reciente de 0-0 a vigilar")
 
-    best_cover = max(home.scored / home.matches, away.scored / away.matches)
+    # 2) One-team coverage: for O0.5, one reliable scorer can be enough.
+    home_cover = home.scored / home.matches
+    away_cover = away.scored / away.matches
+    best_cover = max(home_cover, away_cover)
+    combined_failure = (1 - home_cover) * (1 - away_cover)
+    risk += combined_failure * 30
+
     if best_cover >= 0.9:
-        risk -= 12
-        reasons.append("Al menos un equipo marcó en ≥90% de su muestra")
+        risk -= 14
+        reasons.append("Un equipo marcó en ≥90% y puede cubrir el gol")
     elif best_cover >= 0.8:
-        risk -= 7
-        reasons.append("Al menos un equipo marcó en ≥80% de su muestra")
-    else:
-        reasons.append("Ningún equipo alcanza 80% de cobertura individual")
+        risk -= 9
+        reasons.append("Un equipo marcó en ≥80% y ofrece buena cobertura")
+    elif best_cover < 0.7:
+        risk += 8
+        reasons.append("Ningún equipo supera 70% de partidos marcando")
 
+    # 3) Conceding supports the opposite route to the required single goal.
+    best_concede = max(home.conceded / home.matches, away.conceded / away.matches)
+    if best_concede >= 0.8:
+        risk -= 7
+        reasons.append("Al menos un equipo recibió gol en ≥80%")
+    elif best_concede < 0.5:
+        risk += 6
+        reasons.append("Ambos muestran baja frecuencia de recibir gol")
+
+    # 4) Venue split matters, but does not duplicate the general sample heavily.
     if home_venue and away_venue:
         venue_n = home_venue.matches + away_venue.matches
-        if venue_n:
+        if venue_n >= 6:
             venue_zz = home_venue.zero_zero + away_venue.zero_zero
-            risk += min(15, round((venue_zz / venue_n) * 60))
-            if venue_zz:
-                reasons.append("Hay 0-0 en los splits casa/fuera")
+            venue_rate = venue_zz / venue_n
+            risk += min(12, venue_rate * 45)
+            if venue_zz == 0:
+                reasons.append("Sin 0-0 en la muestra casa/fuera")
+            elif venue_rate >= 0.2:
+                reasons.append("Casa/fuera añade señal de 0-0")
 
-    if h2h_n:
-        risk += min(10, round((h2h_zero_zero / h2h_n) * 20))
-        if h2h_zero_zero:
-            reasons.append("El H2H contiene 0-0")
+    # 5) H2H is deliberately secondary.
+    if h2h_n >= 3:
+        h2h_rate = h2h_zero_zero / h2h_n
+        risk += min(6, h2h_rate * 12)
+        if h2h_zero_zero >= 2:
+            reasons.append("H2H repite 0-0, con peso secundario")
 
-    risk = max(0, min(int(risk), 100))
-    if risk <= 12:
+    risk = max(0, min(round(risk), 100))
+    if risk <= 10:
         label = "🟢 Muy bajo"
-    elif risk <= 25:
+    elif risk <= 22:
         label = "🟢 Bajo"
-    elif risk <= 45:
+    elif risk <= 38:
         label = "🟡 Medio"
-    elif risk <= 65:
+    elif risk <= 55:
         label = "🟠 Alto"
     else:
         label = "🔴 Muy alto"
