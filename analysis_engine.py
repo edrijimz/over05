@@ -8,6 +8,7 @@ class TeamForm:
     scored: int
     conceded: int
     avg_total_goals: float
+    scores: tuple = ()
 
 
 def summarize(fixtures: list, team_id: int) -> TeamForm:
@@ -39,3 +40,28 @@ def rate(home: TeamForm, away: TeamForm, h2h_zero_zero: int=0, h2h_n: int=0):
     elif score >= 65: label="🟡 Revisar"
     else: label="🔴 Descartar"
     return score,label
+
+
+def summarize_tsdb(events: list, team_id: str, limit: int = 10) -> TeamForm:
+    rows = []
+    for e in events:
+        try:
+            hg, ag = int(e.get("intHomeScore")), int(e.get("intAwayScore"))
+        except (TypeError, ValueError):
+            continue
+        if str(team_id) not in {str(e.get("idHomeTeam") or ""), str(e.get("idAwayTeam") or "")}:
+            continue
+        rows.append((e, hg, ag))
+    rows = rows[:limit]
+    zz = scored = conceded = 0
+    totals, scorelines = [], []
+    for e, hg, ag in rows:
+        is_home = str(e.get("idHomeTeam") or "") == str(team_id)
+        gf, ga = (hg, ag) if is_home else (ag, hg)
+        zz += int(hg == 0 and ag == 0)
+        scored += int(gf > 0)
+        conceded += int(ga > 0)
+        totals.append(hg + ag)
+        scorelines.append(str(e.get("strHomeTeam") or "") + " " + str(hg) + "-" + str(ag) + " " + str(e.get("strAwayTeam") or ""))
+    n = len(rows)
+    return TeamForm(n, zz, scored, conceded, sum(totals) / n if n else 0, tuple(scorelines))
