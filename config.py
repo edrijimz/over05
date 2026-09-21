@@ -32,6 +32,7 @@ TSDB_KNOWN_LEAGUE_IDS = {
     ("International", "World Cup Qualifying CONMEBOL"): "5515",
     ("International", "World Cup Qualifying CONCACAF"): "5516",
     ("International", "World Cup Qualifying UEFA"): "5518",
+    ("International", "CONCACAF Nations League"): "5280",
 }
 
 TSDB_TARGET_ALIASES = {
