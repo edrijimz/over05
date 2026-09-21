@@ -157,15 +157,29 @@ def resolve_tsdb_team_id(key, team_id, team_name):
                 candidates.append(str(tid))
     except Exception:
         pass
-    # Prefer the first candidate that actually has recent results.
+    # Prefer a candidate whose returned events really belong to that team.
+    # TSDB can return rows under a stale/duplicate team id; accepting merely
+    # a non-empty response later produces 0 valid matches in summarize_tsdb.
+    best_tid, best_events, best_valid = None, [], 0
     for tid in candidates:
         try:
             events = api.team_last_events(tid)
-            if events:
-                return tid, events
         except Exception:
             continue
-    return (candidates[0] if candidates else None), []
+        valid = [
+            e for e in events
+            if str(tid) in {
+                str(e.get("idHomeTeam") or ""),
+                str(e.get("idAwayTeam") or ""),
+            }
+            and e.get("intHomeScore") is not None
+            and e.get("intAwayScore") is not None
+        ]
+        if len(valid) > best_valid:
+            best_tid, best_events, best_valid = tid, events, len(valid)
+        if best_valid >= 5:
+            return best_tid, best_events
+    return (best_tid or (candidates[0] if candidates else None)), best_events
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_h2h_tsdb(key, home_name, away_name):
@@ -590,6 +604,7 @@ elif page == "Radar":
         kickoff_raw = m.get("kickoffAt")
         kickoff = cr_time(kickoff_raw) if kickoff_raw else None
         analysis_score, analysis_label = None, "⚪ Pendiente"
+        tsdb_note = ""
         home_form = away_form = home_venue = away_venue = None
         h2h_n = h2h_zz = 0
         model_p = None
@@ -620,9 +635,13 @@ elif page == "Radar":
                 if home_form and away_form and home_form.matches >= 5 and away_form.matches >= 5:
                     analysis_score, analysis_label = rate(home_form, away_form, h2h_zz, h2h_n)
                 else:
+                    hn = home_form.matches if home_form else 0
+                    an = away_form.matches if away_form else 0
                     analysis_label = "⚪ Datos insuficientes"
-            except Exception:
+                    tsdb_note = f"TSDB válidos: local {hn}, visitante {an}"
+            except Exception as e:
                 analysis_label = "⚪ Datos insuficientes"
+                tsdb_note = f"TSDB error: {type(e).__name__}"
 
         ref_odd, odds_match_score = match_reference_odd(home.get("name",""), away.get("name",""), odds_rows)
         odds_range = "✅ 1.02–1.08" if ref_odd is not None and 1.02 <= ref_odd <= 1.08 else ("⬜ Fuera de rango" if ref_odd is not None else "—")
@@ -655,6 +674,7 @@ elif page == "Radar":
             "_away_zz": away_form.zero_zero if away_form else None,
             "_away_n": away_form.matches if away_form else None,
             "_model_p_num": model_p,
+            "_tsdb_note": tsdb_note,
             "Estado": analysis_label,
             "_home_scores": home_form.scores if home_form else (),
             "_away_scores": away_form.scores if away_form else (),
