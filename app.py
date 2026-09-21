@@ -7,6 +7,7 @@ import streamlit as st
 from openfoot_client import OpenFoot
 from thesportsdb_client import TheSportsDB
 from database import evaluations
+from analysis_engine import summarize_tsdb, rate
 from config import TIMEZONE, TARGET_LEAGUES, KNOWN_COMPETITION_IDS, TSDB_TARGET_ALIASES, TSDB_EXTRA_COMPETITION_ALIASES, TSDB_KNOWN_LEAGUE_IDS
 
 st.set_page_config(page_title="Over 0.5 Analyzer", page_icon="⚽", layout="wide")
@@ -277,6 +278,7 @@ elif page == "Radar":
                     continue
                 matches.append({
                     "id": e.get("idEvent"),
+                    "_raw": e,
                     "kickoffAt": kickoff,
                     "competitionName": e.get("strLeague") or "",
                     "competitionId": e.get("idLeague") or "",
@@ -305,12 +307,35 @@ elif page == "Radar":
         away = m.get("awayTeam") or {}
         kickoff_raw = m.get("kickoffAt")
         kickoff = cr_time(kickoff_raw) if kickoff_raw else None
+        analysis_score, analysis_label = None, "⚪ Pendiente"
+        home_form = away_form = None
+        if provider.startswith("TheSportsDB") and m.get("_raw"):
+            event = m["_raw"]
+            home_id, away_id = event.get("idHomeTeam"), event.get("idAwayTeam")
+            if home_id and away_id:
+                try:
+                    home_form = summarize_tsdb(api_tsdb.team_last_events(str(home_id)), str(home_id), 10)
+                    away_form = summarize_tsdb(api_tsdb.team_last_events(str(away_id)), str(away_id), 10)
+                    if home_form.matches >= 5 and away_form.matches >= 5:
+                        analysis_score, analysis_label = rate(home_form, away_form)
+                    else:
+                        analysis_label = "⚪ Datos insuficientes"
+                except Exception:
+                    analysis_label = "⚪ Datos insuficientes"
+
         rows.append({
             "Hora CR": kickoff.strftime("%I:%M %p").lstrip("0") if kickoff else "",
             "_dt": kickoff,
             "Competición": comp_name,
             "Partido": f'{home.get("name","")} – {away.get("name","")}',
-            "Estado API": m.get("status", ""),
+            "0-0 Local": f"{home_form.zero_zero}/{home_form.matches}" if home_form else "—",
+            "0-0 Visit.": f"{away_form.zero_zero}/{away_form.matches}" if away_form else "—",
+            "Marca ≥1": (f"{round(100*home_form.scored/home_form.matches)}% / {round(100*away_form.scored/away_form.matches)}%" if home_form and away_form and home_form.matches and away_form.matches else "—"),
+            "Recibe ≥1": (f"{round(100*home_form.conceded/home_form.matches)}% / {round(100*away_form.conceded/away_form.matches)}%" if home_form and away_form and home_form.matches and away_form.matches else "—"),
+            "Score +0.5": analysis_score if analysis_score is not None else "—",
+            "Estado": analysis_label,
+            "_home_scores": home_form.scores if home_form else (),
+            "_away_scores": away_form.scores if away_form else (),
         })
 
     if not rows:
@@ -346,7 +371,7 @@ elif page == "Radar":
         b.metric("Mañana · 3:00 AM–12:00 PM", morning)
         c.metric("Tarde · 12:15 PM–11:30 PM", afternoon)
         dcol.metric("Fuera de tandas", outside)
-        st.warning("Radar en modo de validación: todavía no asignamos Score +0.5 hasta fijar los IDs de nuestras ligas y cargar históricos.")
+        st.info("Score +0.5 experimental basado en resultados recientes de TheSportsDB. Es un índice de perfil, no una probabilidad calibrada.")
         with st.expander(f"Diagnóstico · {provider}"):
             st.caption("Información técnica para validar qué proveedor está ejecutando el Radar.")
             if provider.startswith("TheSportsDB"):
@@ -409,7 +434,24 @@ elif page == "Radar":
             shown = df[~(in_morning | in_afternoon)]
         else:
             shown = df
-        st.dataframe(shown.drop(columns=["_dt"]), use_container_width=True, hide_index=True)
+                visible_cols = ["Hora CR", "Competición", "Partido", "0-0 Local", "0-0 Visit.", "Marca ≥1", "Recibe ≥1", "Score +0.5", "Estado"]
+        st.dataframe(shown[visible_cols], use_container_width=True, hide_index=True)
+        st.subheader("Detalle de los datos usados")
+        for _, row in shown.iterrows():
+            with st.expander(str(row["Partido"]) + " · " + str(row["Estado"])):
+                left, right = st.columns(2)
+                with left:
+                    st.write("**Últimos resultados · local**")
+                    if row["_home_scores"]:
+                        st.write("\n".join("• " + x for x in row["_home_scores"]))
+                    else:
+                        st.caption("Sin histórico suficiente.")
+                with right:
+                    st.write("**Últimos resultados · visitante**")
+                    if row["_away_scores"]:
+                        st.write("\n".join("• " + x for x in row["_away_scores"]))
+                    else:
+                        st.caption("Sin histórico suficiente.")
 
 elif page == "Historial":
     cols, rows = evaluations()
