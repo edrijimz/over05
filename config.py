@@ -73,7 +73,7 @@ TSDB_TARGET_ALIASES = {
 # International competitions approved for the radar. More national cups will be
 # added by canonical ID as we validate them.
 TSDB_EXTRA_COMPETITION_ALIASES = [
-    "UEFA Champions League", "UEFA Europa League", "UEFA Europa Conference League",
+    "UEFA Champions League", "UEFA Women's Champions League", "UEFA Europa League", "UEFA Europa Conference League",
     "Copa Libertadores", "Copa Sudamericana", "Recopa Sudamericana",
     "CONCACAF Champions Cup", "CONCACAF Central American Cup",
     "UEFA Nations League", "UEFA European Championship",
