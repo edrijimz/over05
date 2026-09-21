@@ -152,28 +152,51 @@ def get_h2h_tsdb(key, home_name, away_name):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_oddschecker_over05():
-    """Obtiene cuotas O0.5 públicas como referencia; nunca alimentan el Score."""
+    """Lee la tabla pública O0.5 de Oddschecker como referencia independiente."""
     url = "https://www.oddschecker.com/football/over-under-0.5"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153 Safari/537.36", "Accept-Language": "en-GB,en;q=0.9"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153 Safari/537.36",
+        "Accept-Language": "en-GB,en;q=0.9",
+    }
     try:
         r = requests.get(url, headers=headers, timeout=12)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
-        found = []
         import re
-        for tr in soup.find_all("tr"):
-            txt = " ".join(tr.stripped_strings)
-            prices = re.findall(r"(?<!\d)(\d{1,3})\s*/\s*(\d{1,3})(?!\d)", txt)
-            if not prices:
-                continue
-            m = re.search(r"(.+?)\s+(?:v|vs|–|-)\s+(.+?)(?=\s+\d{1,3}\s*/\s*\d{1,3})", txt, re.I)
-            if not m:
-                continue
-            home = re.sub(r"^.*?\b(?:AM|PM)\b\s*", "", m.group(1), flags=re.I).strip()
-            away = m.group(2).strip()
-            num, den = map(int, prices[0])
-            if den:
-                found.append({"home": home, "away": away, "odds": round(1 + num / den, 3)})
+        found, seen = [], set()
+
+        # The public page can render as tables or hydrated divs. Parse the
+        # visible text instead of depending on one HTML layout.
+        text = " ".join(soup.stripped_strings)
+        pattern = re.compile(
+            r"(\d{1,2}:\d{2})\s+(?:TV\s+)?(.{2,80}?)\s+v\s+(.{2,80}?)\s+(\d{1,3})\s*/\s*(\d{1,3})\s+(\d{1,3})\s*/\s*(\d{1,3})",
+            re.I,
+        )
+        for m in pattern.finditer(text):
+            home, away = m.group(2).strip(), m.group(3).strip()
+            num, den = int(m.group(4)), int(m.group(5))
+            key = (norm(home), norm(away))
+            if den and key not in seen:
+                seen.add(key)
+                found.append({
+                    "home": home,
+                    "away": away,
+                    "odds": round(1 + num / den, 3),
+                })
+
+        # Fallback to row parsing if Oddschecker changes the surrounding text.
+        if not found:
+            for tr in soup.find_all("tr"):
+                txt = " ".join(tr.stripped_strings)
+                m = re.search(
+                    r"(\d{1,2}:\d{2})\s+(?:TV\s+)?(.+?)\s+v\s+(.+?)\s+(\d{1,3})\s*/\s*(\d{1,3})",
+                    txt, re.I,
+                )
+                if not m:
+                    continue
+                num, den = int(m.group(4)), int(m.group(5))
+                if den:
+                    found.append({"home": m.group(2).strip(), "away": m.group(3).strip(), "odds": round(1 + num / den, 3)})
         return found, None
     except Exception as e:
         return [], str(e)
@@ -467,7 +490,13 @@ elif page == "Radar":
         elif not odds_rows:
             st.caption("Oddschecker respondió, pero no se pudieron interpretar cuotas O0.5 en esta carga.")
         else:
-            st.caption(f"Cuotas O0.5 de referencia: {len(odds_rows)} partidos leídos de Oddschecker · caché 5 min · confirmar precio final en bet365.")
+            matched_odds = int((df["Cuota O0.5 ref."] != "—").sum())
+            st.caption(f"Cuotas O0.5 de referencia: {len(odds_rows)} partidos leídos de Oddschecker · {matched_odds}/{len(df)} emparejados con el Radar · caché 5 min · confirmar precio final en bet365.")
+            with st.expander("Diagnóstico · cuotas O0.5"):
+                st.write(f"Partidos leídos de Oddschecker: {len(odds_rows)}")
+                st.write(f"Partidos del Radar con coincidencia: {matched_odds}/{len(df)}")
+                if odds_rows:
+                    st.dataframe(pd.DataFrame(odds_rows[:30]), use_container_width=True, hide_index=True)
         with st.expander(f"Diagnóstico · {provider}"):
             st.caption("Información técnica para validar qué proveedor está ejecutando el Radar.")
             if provider.startswith("TheSportsDB"):
