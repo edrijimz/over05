@@ -216,14 +216,17 @@ elif page == "Radar":
             # Fetch both so evening matches in CR (already next day in UTC)
             # stay under the correct local date.
             api_tsdb = TheSportsDB(tsdb_key)
-            raw = (
-                api_tsdb.events_day(d.isoformat(), "Soccer")
-                + api_tsdb.events_day((d + timedelta(days=1)).isoformat(), "Soccer")
-            )
-            raw = list({str(e.get("idEvent")): e for e in raw if e.get("idEvent")}.values())
             tsdb_mapping = get_tsdb_whitelist(tsdb_key)
-            allowed_ids = set(tsdb_mapping.values())
-            raw = [e for e in raw if str(e.get("idLeague") or "") in allowed_ids]
+
+            # Query each approved competition explicitly. Although Schedule Day
+            # accepts a sport filter, using league IDs avoids depending on the
+            # completeness/order of the global daily response.
+            raw = []
+            for league_id in sorted(set(tsdb_mapping.values())):
+                raw.extend(api_tsdb.events_day(d.isoformat(), league_id=league_id))
+                raw.extend(api_tsdb.events_day((d + timedelta(days=1)).isoformat(), league_id=league_id))
+
+            raw = list({str(e.get("idEvent")): e for e in raw if e.get("idEvent")}.values())
 
             def tsdb_status(e):
                 s = str(e.get("strStatus") or "").upper().strip()
@@ -310,7 +313,7 @@ elif page == "Radar":
     else:
         df = pd.DataFrame(rows)
         df = df.sort_values("_dt", na_position="last")
-        st.write(f"**{len(df)} partidos devueltos por {provider} para {d.isoformat()}**")
+        st.write(f"**{len(df)} partidos programados de la whitelist para {d.isoformat()} (hora Costa Rica)**")
         if provider == "OpenFoot":
             st.caption(f"Ligas resueltas: {len(league_mapping)}/{len(TARGET_LEAGUES)} · máximo una consulta por liga cada 30 min")
         else:
