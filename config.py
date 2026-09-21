@@ -84,6 +84,26 @@ TSDB_EXTRA_COMPETITION_ALIASES = [
     "CONCACAF Gold Cup Qualifying",
 ]
 
+
+# Oddschecker Accumulator cards confirmed from its JSON responses.
+# event_id is kept for validation/debugging; card_id is what the Accumulator endpoint uses.
+ODDSCHECKER_COMPETITIONS = {
+    "English Premier League": {"card_id": 75, "event_id": 2457},
+    "English FA Cup Qualification": {"card_id": 8705, "event_id": 38928147},
+    "English Football League Trophy": {"card_id": 15845, "event_id": 226081},
+    "Brazilian Serie B": {"card_id": 8738, "event_id": 25631},
+    "Argentine Primera Division": {"card_id": 10184, "event_id": 1753},
+    "Dutch Cup": {"card_id": 11719, "event_id": 10489},
+    "Womens Champions League": {"card_id": 30199, "event_id": 270469},
+    "International Friendlies": {"card_id": 19082, "event_id": 2704},
+    "Peruvian Primera Division": {"card_id": 23852, "event_id": 190131},
+    "UEFA Nations League": {"card_id": 7350881, "event_id": 38878321},
+    "US MLS": {"card_id": 24094, "event_id": 197296},
+    "Scottish Championship": {"card_id": 9156048, "event_id": 10495},
+    "Irish Premier Division": {"card_id": 11722, "event_id": 2442},
+    "Spanish Segunda Division": {"card_id": 9088192, "event_id": 9947},
+}
+
 KNOWN_COMPETITION_IDS = {
     ("Colombia", "Primera A"): "comp_primera_a_col",
     ("Costa Rica", "Primera Division"): "comp_primera_division_crc",
