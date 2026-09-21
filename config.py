@@ -19,6 +19,17 @@ TARGET_LEAGUES = [
 
 # Competition names/aliases accepted from TheSportsDB.
 # We intentionally filter by canonical league ID after resolving these names.
+# Canonical TheSportsDB IDs verified for leagues where names have changed.
+# IDs take precedence over alias matching.
+TSDB_KNOWN_LEAGUE_IDS = {
+    ("Mexico", "Liga MX"): "4350",
+    ("Colombia", "Primera A"): "4497",
+    ("Costa Rica", "Primera Division"): "4815",
+    ("USA", "MLS"): "4346",
+    ("Brazil", "Serie A"): "4351",
+    ("Argentina", "Liga Profesional"): "4406",
+}
+
 TSDB_TARGET_ALIASES = {
     ("Argentina", "Liga Profesional"): ["Argentinian Primera Division", "Argentina Primera Division", "Liga Profesional Argentina"],
     ("Argentina", "Primera Nacional"): ["Argentinian Primera B Nacional", "Primera Nacional"],
