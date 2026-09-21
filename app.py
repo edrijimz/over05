@@ -338,6 +338,40 @@ def get_oddschecker_over05(day, competition_names=()):
         r.raise_for_status()
         data = r.json()
 
+        # The Women's Champions League card is known (30199). When that
+        # competition is present in the Radar, request it directly as well.
+        # This avoids depending on the very large multi-card Accumulator
+        # response, which can omit/trim some card data.
+        women_tokens = ("women", "womens", "femenina", "femenino")
+        uwcl_requested = any(
+            "champions" in norm(comp)
+            and any(token in norm(comp).split() for token in women_tokens)
+            for comp in competition_names
+        )
+        uwcl_http = None
+        uwcl_merge_counts = {}
+        if uwcl_requested:
+            try:
+                uwcl_url = (
+                    "https://www.oddschecker.com/api/acca/v1/acca/coupon/cards/"
+                    f"30199/marketTemplate/9/loadDataFor/3/forDate/{day}/andDays/1"
+                )
+                ur = requests.get(uwcl_url, headers=headers, timeout=12)
+                uwcl_http = ur.status_code
+                ur.raise_for_status()
+                uwcl_data = ur.json()
+                # Accumulator payloads keep the useful entities in top-level
+                # lists. Merge the dedicated card response before parsing.
+                for key, value in uwcl_data.items():
+                    if isinstance(value, list):
+                        if not isinstance(data.get(key), list):
+                            data[key] = []
+                        before = len(data[key])
+                        data[key].extend(value)
+                        uwcl_merge_counts[key] = len(data[key]) - before
+            except Exception as ue:
+                uwcl_merge_counts["error"] = str(ue)
+
         # Index every subevent (fixture).
         subevents = {}
         for se in data.get("subevents", []):
@@ -449,6 +483,9 @@ def get_oddschecker_over05(day, competition_names=()):
             "league_pages_checked": discovery.get("league_pages_checked", 0),
             "extra_cards": discovery.get("extra_cards", []),
             "discovery_error": discovery.get("discovery_error"),
+            "uwcl_direct_requested": uwcl_requested,
+            "uwcl_direct_http": uwcl_http,
+            "uwcl_direct_merge": uwcl_merge_counts,
         }
         return found, None, diag
     except Exception as e:
