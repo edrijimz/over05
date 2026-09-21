@@ -14,5 +14,17 @@ class TheSportsDB:
         r.raise_for_status()
         return r.json()
 
-    def events_day(self, day: str, sport: str = "Soccer"):
-        return self._get("eventsday.php", d=day, s=sport).get("events") or []
+    def events_day(self, day: str, sport: str = "Soccer", league_id: str | None = None):
+        params = {"d": day, "s": sport}
+        if league_id:
+            params["l"] = str(league_id)
+        return self._get("eventsday.php", **params).get("events") or []
+
+    def all_leagues(self):
+        return self._get("all_leagues.php").get("leagues") or []
+
+    def seasons(self, league_id: str):
+        return self._get("search_all_seasons.php", id=str(league_id)).get("seasons") or []
+
+    def season_events(self, league_id: str, season: str):
+        return self._get("eventsseason.php", id=str(league_id), s=season).get("events") or []
