@@ -169,10 +169,9 @@ def get_oddschecker_over05(day):
         r.raise_for_status()
         data = r.json()
 
+        # Index every subevent (fixture).
         subevents = {}
         for se in data.get("subevents", []):
-            # The feed can contain live/non-live duplicates; names are what we
-            # need for matching against TheSportsDB.
             sid = se.get("id")
             if sid is not None:
                 subevents[sid] = {
@@ -180,57 +179,66 @@ def get_oddschecker_over05(day):
                     "away": se.get("awayTeamName", ""),
                 }
 
-        # Resolve OVER 0.5 bet ids to their subevent ids.
-        over_bets = {}
-        for market in data.get("markets", []):
-            if market.get("marketTemplateId") != 9:
-                continue
-            sid = market.get("subeventId")
-            for bet in market.get("bets", []) or []:
-                if (
-                    str(bet.get("line")) == "0.5"
-                    and str(bet.get("genericName", bet.get("betName", ""))).upper() == "OVER"
-                ):
-                    bid = bet.get("ocBetId", bet.get("betId"))
-                    if bid is not None:
-                        over_bets[bid] = sid
+        # Oddschecker keeps markets, bets and bookmaker prices in separate
+        # collections in some responses. Walk the full JSON and build the
+        # relationships instead of assuming one nesting shape.
+        market_to_subevent = {}
+        bet_to_subevent = {}
+        over_bet_ids = set()
+        price_objects = []
 
-        # Some responses expose bets at top level rather than nested in markets.
-        for bet in data.get("bets", []):
-            if (
-                bet.get("marketTemplateId") == 9
-                and str(bet.get("line")) == "0.5"
-                and str(bet.get("genericName", bet.get("betName", ""))).upper() == "OVER"
-            ):
-                bid = bet.get("ocBetId", bet.get("betId"))
-                sid = bet.get("subeventId")
-                if bid is not None and sid is not None:
-                    over_bets[bid] = sid
-
-        # Prices can be under odds/prices/bookmakerOdds depending on feed shape.
-        price_rows = []
-        for key in ("odds", "prices", "bookmakerOdds"):
-            val = data.get(key, [])
-            if isinstance(val, list):
-                price_rows.extend(val)
-
-        # Recursively collect objects containing betId + decimal, making the
-        # parser tolerant of Oddschecker nesting changes.
-        def collect_prices(obj):
+        def walk(obj, inherited_sid=None, inherited_market_id=None):
             if isinstance(obj, dict):
-                if ("betId" in obj or "ocBetId" in obj) and "decimal" in obj:
-                    price_rows.append(obj)
+                sid = obj.get("subeventId", inherited_sid)
+                market_id = obj.get("ocMarketId", obj.get("marketId", inherited_market_id))
+
+                if sid is not None and market_id is not None:
+                    market_to_subevent[market_id] = sid
+
+                mtid = obj.get("marketTemplateId")
+                generic = str(obj.get("genericName", obj.get("betName", ""))).upper()
+                line = str(obj.get("line", ""))
+                bid = obj.get("ocBetId", obj.get("betId"))
+
+                if mtid == 9 and line == "0.5" and generic == "OVER" and bid is not None:
+                    over_bet_ids.add(bid)
+                    if sid is not None:
+                        bet_to_subevent[bid] = sid
+                    elif market_id in market_to_subevent:
+                        bet_to_subevent[bid] = market_to_subevent[market_id]
+
+                if bid is not None and "decimal" in obj:
+                    price_objects.append(obj)
+
                 for v in obj.values():
-                    collect_prices(v)
+                    walk(v, sid, market_id)
             elif isinstance(obj, list):
                 for v in obj:
-                    collect_prices(v)
-        collect_prices(data)
+                    walk(v, inherited_sid, inherited_market_id)
+
+        walk(data)
+
+        # Second pass: bets may only carry marketId while the market object
+        # carrying subeventId appeared elsewhere.
+        def link_bets(obj):
+            if isinstance(obj, dict):
+                bid = obj.get("ocBetId", obj.get("betId"))
+                market_id = obj.get("marketId", obj.get("ocMarketId"))
+                if bid in over_bet_ids and bid not in bet_to_subevent and market_id in market_to_subevent:
+                    bet_to_subevent[bid] = market_to_subevent[market_id]
+                for v in obj.values():
+                    link_bets(v)
+            elif isinstance(obj, list):
+                for v in obj:
+                    link_bets(v)
+        link_bets(data)
 
         best = {}
-        for p in price_rows:
+        for p in price_objects:
             bid = p.get("betId", p.get("ocBetId"))
-            sid = over_bets.get(bid)
+            if bid not in over_bet_ids:
+                continue
+            sid = bet_to_subevent.get(bid)
             if sid is None:
                 continue
             try:
@@ -239,6 +247,7 @@ def get_oddschecker_over05(day):
                 continue
             if dec <= 1:
                 continue
+            # Use the best available O0.5 decimal quote across bookmakers.
             if sid not in best or dec > best[sid]:
                 best[sid] = dec
 
@@ -262,8 +271,10 @@ def get_oddschecker_over05(day):
         diag = {
             "HTTP": r.status_code,
             "subevents": len(subevents),
-            "over_bet_ids": len(over_bets),
-            "prices_found": len(price_rows),
+            "markets_linked": len(market_to_subevent),
+            "over_bet_ids": len(over_bet_ids),
+            "over_bets_linked": len(bet_to_subevent),
+            "prices_found": len(price_objects),
             "matched_prices": len(found),
         }
         return found, None, diag
