@@ -335,6 +335,38 @@ elif page == "Radar":
         st.warning("Radar en modo de validación: todavía no asignamos Score +0.5 hasta fijar los IDs de nuestras ligas y cargar históricos.")
         with st.expander(f"Diagnóstico · {provider}"):
             st.caption("Información técnica para validar qué proveedor está ejecutando el Radar.")
+            if provider.startswith("TheSportsDB"):
+                st.write("**Competiciones TheSportsDB resueltas por la whitelist**")
+                st.dataframe(
+                    pd.DataFrame([
+                        {"Objetivo": f"{k[0]} · {k[1]}", "idLeague": v}
+                        for k, v in sorted(get_tsdb_whitelist(tsdb_key).items(), key=lambda x: str(x[0]))
+                    ]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                st.write("**Eventos internacionales recibidos antes de aplicar la whitelist**")
+                intl = [
+                    {
+                        "idEvent": e.get("idEvent"),
+                        "idLeague": e.get("idLeague"),
+                        "Competición API": e.get("strLeague"),
+                        "Local": e.get("strHomeTeam"),
+                        "Visitante": e.get("strAwayTeam"),
+                        "Fecha API": e.get("dateEvent"),
+                        "Hora API": e.get("strTime"),
+                        "Estado": e.get("strStatus"),
+                    }
+                    for e in raw
+                    if any(
+                        word in str(e.get("strLeague") or "").lower()
+                        for word in ("concacaf", "conmebol", "nations", "international", "world cup", "copa america")
+                    )
+                ]
+                if intl:
+                    st.dataframe(pd.DataFrame(intl), use_container_width=True, hide_index=True)
+                else:
+                    st.caption("No se detectaron eventos internacionales en la respuesta ya filtrada para esta fecha.")
             try:
                 st.write("**Proveedor activo**")
                 st.code(provider)
