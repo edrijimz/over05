@@ -78,7 +78,9 @@ TSDB_EXTRA_COMPETITION_ALIASES = [
     "UEFA Nations League", "UEFA European Championship",
     "World Cup Qualifying UEFA", "World Cup Qualifying CONMEBOL",
     "World Cup Qualifying CONCACAF",
+    "International Friendlies",
     "Copa America", "CONCACAF Gold Cup", "CONCACAF Nations League",
+    "CONCACAF Gold Cup Qualifying",
 ]
 
 KNOWN_COMPETITION_IDS = {
