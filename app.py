@@ -151,7 +151,7 @@ def get_h2h_tsdb(key, home_name, away_name):
         return []
 
 @st.cache_data(ttl=300, show_spinner=False)
-def get_oddschecker_over05(day):
+def get_oddschecker_over05(day, competition_names=()):
     """Obtiene O0.5 desde el JSON que usa Oddschecker Accumulator."""
     cards = "30175,9155204,9098782,9020854,7350881,75,19061,8706,8705,28780,79,19065,9123568,80,8631121,16658,19082,15845,17515,33566,9117862,9041024,9041023,9105385,9084556,31412,90,10706,10704,9156048,10869,10928,10867,10879,16586,10873,10926,9100891,10846,22521,9118464,20311,18334,16285,18629,11638,281,8707,24002,26227,9076483,9085251,24412,23954,9117395,18499,8079172,11641,24094,9112681,24439,11635,10095,11722,17225,8738,10890,24263,10903,422039,10894,11715,26102,13400,17495,24067,18347,23980,8677499,16839,26671,4958315,11782,17319,11780,10892,10900,13525,19031,11717,23852,10184,19073,9092469,11719,8197690,17683,421835,19039,18112,416270,27688,18348,26338,30199,18503,18289,422333,422723,9088192,20471,27769,24547"
     url = (
@@ -165,6 +165,83 @@ def get_oddschecker_over05(day):
         "Accept-Language": "en-GB,en;q=0.9",
     }
     try:
+        # Discover extra competition cards from Oddschecker's Leagues & Cups
+        # directory. This avoids maintaining every league/card id manually.
+        discovered_cards = set()
+        discovery = {"league_links": 0, "league_pages_checked": 0, "extra_cards": []}
+        try:
+            directory_url = "https://www.oddschecker.com/football/leagues-cups"
+            dr = requests.get(directory_url, headers=headers, timeout=15)
+            dr.raise_for_status()
+            dsoup = BeautifulSoup(dr.text, "html.parser")
+            links = []
+            for a in dsoup.find_all("a", href=True):
+                href = a.get("href", "")
+                label = " ".join(a.stripped_strings)
+                if "/football/" in href and label:
+                    links.append((label, href))
+
+            discovery["league_links"] = len(links)
+
+            def league_tokens(value):
+                stop = {"league", "liga", "division", "primera", "serie", "the", "de", "football", "soccer"}
+                return {x for x in norm(value).split() if len(x) >= 2 and x not in stop}
+
+            chosen = []
+            for comp in competition_names:
+                ct = league_tokens(comp)
+                best = None
+                best_score = 0.0
+                for label, href in links:
+                    lt = league_tokens(label)
+                    if not ct or not lt:
+                        continue
+                    score = len(ct & lt) / max(1, len(ct | lt))
+                    # Strong exact/containment bonus for names such as MLS.
+                    if norm(label).strip() == norm(comp).strip():
+                        score = 1.0
+                    elif norm(label).strip() in norm(comp) or norm(comp).strip() in norm(label):
+                        score = max(score, 0.75)
+                    if score > best_score:
+                        best, best_score = (label, href), score
+                if best and best_score >= 0.45:
+                    chosen.append(best)
+
+            # Fetch only leagues actually present in today's Radar.
+            seen_urls = set()
+            import re
+            for label, href in chosen:
+                full = href if href.startswith("http") else "https://www.oddschecker.com" + href
+                if full in seen_urls:
+                    continue
+                seen_urls.add(full)
+                lr = requests.get(full, headers=headers, timeout=15)
+                if not lr.ok:
+                    continue
+                discovery["league_pages_checked"] += 1
+                txt = lr.text
+
+                # League pages expose cards in embedded config, e.g. cards:[{id:75}].
+                for pat in (
+                    r'"cards"\s*:\s*\[\s*\{\s*"id"\s*:\s*(\d+)',
+                    r'cards\s*:\s*\[\s*\{\s*id\s*:\s*(\d+)',
+                    r'"cardId"\s*:\s*(\d+)',
+                ):
+                    for cid in re.findall(pat, txt):
+                        discovered_cards.add(cid)
+
+            discovery["extra_cards"] = sorted(discovered_cards)
+        except Exception as de:
+            discovery["discovery_error"] = str(de)
+
+        if discovered_cards:
+            base_cards = set(cards.split(","))
+            cards = ",".join(list(base_cards | discovered_cards))
+            url = (
+                "https://www.oddschecker.com/api/acca/v1/acca/coupon/cards/"
+                f"{cards}/marketTemplate/9/loadDataFor/3/forDate/{day}/andDays/1"
+            )
+
         r = requests.get(url, headers=headers, timeout=20)
         r.raise_for_status()
         data = r.json()
@@ -276,6 +353,10 @@ def get_oddschecker_over05(day):
             "over_bets_linked": len(bet_to_subevent),
             "prices_found": len(price_objects),
             "matched_prices": len(found),
+            "league_links": discovery.get("league_links", 0),
+            "league_pages_checked": discovery.get("league_pages_checked", 0),
+            "extra_cards": discovery.get("extra_cards", []),
+            "discovery_error": discovery.get("discovery_error"),
         }
         return found, None, diag
     except Exception as e:
@@ -454,7 +535,20 @@ elif page == "Radar":
     # El Radar solo muestra partidos que todavía no comenzaron.
     matches = [m for m in matches if m.get("status") == "scheduled"]
 
-    odds_rows, odds_error, odds_diag = get_oddschecker_over05(d.isoformat())
+    radar_competitions = set()
+    for _m in matches:
+        _comp = _m.get("competition") or {}
+        _name = _comp.get("name") if isinstance(_comp, dict) else ""
+        _name = _name or _m.get("competitionName") or ""
+        _target = _m.get("_target")
+        if _target:
+            _name = _target[1]
+        if _name:
+            radar_competitions.add(str(_name))
+
+    odds_rows, odds_error, odds_diag = get_oddschecker_over05(
+        d.isoformat(), tuple(sorted(radar_competitions))
+    )
 
     rows = []
     for m in matches:
