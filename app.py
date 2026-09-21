@@ -152,7 +152,7 @@ def get_h2h_tsdb(key, home_name, away_name):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_oddschecker_over05():
-    """Lee la tabla pública O0.5 de Oddschecker como referencia independiente."""
+    """Lee el cupón público O/U 0.5 de Oddschecker sin depender de tablas HTML."""
     url = "https://www.oddschecker.com/football/over-under-0.5"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153 Safari/537.36",
@@ -165,38 +165,36 @@ def get_oddschecker_over05():
         import re
         found, seen = [], set()
 
-        # The public page can render as tables or hydrated divs. Parse the
-        # visible text instead of depending on one HTML layout.
-        text = " ".join(soup.stripped_strings)
+        # Oddschecker exposes the coupon as visible text like:
+        # "05:00 New Caledonia v Solomon Islands 1/41 20/1 All Odds".
+        # Parse short text containers first; this is more robust than expecting <tr>.
+        candidates = []
+        for tag in soup.find_all(["tr", "li", "div", "section", "article", "a"]):
+            txt = " ".join(tag.stripped_strings)
+            if " v " in txt and re.search(r"\d{1,3}\s*/\s*\d{1,3}", txt) and len(txt) <= 260:
+                candidates.append(txt)
+
+        # Also parse the complete visible text as a fallback.
+        candidates.append(" ".join(soup.stripped_strings))
+
         pattern = re.compile(
-            r"(\d{1,2}:\d{2})\s+(?:TV\s+)?(.{2,80}?)\s+v\s+(.{2,80}?)\s+(\d{1,3})\s*/\s*(\d{1,3})\s+(\d{1,3})\s*/\s*(\d{1,3})",
+            r"(?:\b\d{1,2}:\d{2}\s+)?(?:TV\s+)?"
+            r"([A-Za-zÀ-ÿ0-9.'’&()\-/ ]{2,80}?)\s+v\s+"
+            r"([A-Za-zÀ-ÿ0-9.'’&()\-/ ]{2,80}?)\s+"
+            r"(\d{1,3})\s*/\s*(\d{1,3})\s+"
+            r"(\d{1,3})\s*/\s*(\d{1,3})",
             re.I,
         )
-        for m in pattern.finditer(text):
-            home, away = m.group(2).strip(), m.group(3).strip()
-            num, den = int(m.group(4)), int(m.group(5))
-            key = (norm(home), norm(away))
-            if den and key not in seen:
-                seen.add(key)
-                found.append({
-                    "home": home,
-                    "away": away,
-                    "odds": round(1 + num / den, 3),
-                })
-
-        # Fallback to row parsing if Oddschecker changes the surrounding text.
-        if not found:
-            for tr in soup.find_all("tr"):
-                txt = " ".join(tr.stripped_strings)
-                m = re.search(
-                    r"(\d{1,2}:\d{2})\s+(?:TV\s+)?(.+?)\s+v\s+(.+?)\s+(\d{1,3})\s*/\s*(\d{1,3})",
-                    txt, re.I,
-                )
-                if not m:
-                    continue
-                num, den = int(m.group(4)), int(m.group(5))
-                if den:
-                    found.append({"home": m.group(2).strip(), "away": m.group(3).strip(), "odds": round(1 + num / den, 3)})
+        for txt in candidates:
+            for m in pattern.finditer(txt):
+                home, away = m.group(1).strip(), m.group(2).strip()
+                # Remove competition/date text accidentally captured before home.
+                home = re.sub(r"^.*?\b(?:202\d|Over|Under)\b\s*", "", home, flags=re.I).strip()
+                num, den = int(m.group(3)), int(m.group(4))
+                key = (norm(home), norm(away))
+                if den and key not in seen:
+                    seen.add(key)
+                    found.append({"home": home, "away": away, "odds": round(1 + num / den, 3)})
         return found, None
     except Exception as e:
         return [], str(e)
