@@ -221,24 +221,26 @@ elif page == "Radar":
             tsdb_mapping = get_tsdb_whitelist(tsdb_key)
             allowed_ids = set(tsdb_mapping.values())
 
-            # Premium Schedule Day can return up to 1500 events, so two bulk
-            # requests are enough for one Costa Rica calendar day (which spans
-            # parts of two UTC dates). Filtering per league here would create
-            # 60+ requests per refresh and can trigger HTTP 429.
-            raw_all = (
-                api_tsdb.events_day(d.isoformat(), "Soccer")
-                + api_tsdb.events_day((d + timedelta(days=1)).isoformat(), "Soccer")
-            )
-            raw_all = list({str(e.get("idEvent")): e for e in raw_all if e.get("idEvent")}.values())
-            international_terms = (
-                "concacaf", "conmebol", "nations league", "copa america",
-                "world cup qualifying", "international friendlies"
-            )
-            raw = [
-                e for e in raw_all
-                if str(e.get("idLeague") or "") in allowed_ids
-                or any(term in str(e.get("strLeague") or "").lower() for term in international_terms)
-            ]
+            # Build the fixture universe from each approved competition.
+            # This avoids relying on the global Schedule Day feed, which can omit
+            # valid fixtures even when the competition itself has them.
+            raw_all = []
+            league_sync_errors = []
+            for target, league_id in tsdb_mapping.items():
+                try:
+                    events = api_tsdb.next_league_events(league_id)
+                    for e in events:
+                        e["_target"] = target
+                        raw_all.append(e)
+                except Exception as exc:
+                    league_sync_errors.append((target, league_id, str(exc)))
+
+            # De-duplicate because aliases can resolve to the same canonical ID.
+            raw = list({
+                str(e.get("idEvent")): e
+                for e in raw_all
+                if e.get("idEvent")
+            }.values())
 
             def tsdb_status(e):
                 s = str(e.get("strStatus") or "").upper().strip()
@@ -337,7 +339,7 @@ elif page == "Radar":
         if provider == "OpenFoot":
             st.caption(f"Ligas resueltas: {len(league_mapping)}/{len(TARGET_LEAGUES)} · máximo una consulta por liga cada 30 min")
         else:
-            st.caption(f"TheSportsDB Premium · whitelist activa · {len(get_tsdb_whitelist(tsdb_key))} competiciones resueltas")
+            st.caption(f"TheSportsDB Premium · calendario por competición · {len(tsdb_mapping)} competiciones resueltas")
         if league_errors:
             st.warning(f"{len(league_errors)} consultas de liga tuvieron error; revisa Diagnóstico OpenFoot.")
         morning = int(sum(morning_start <= x.time() <= morning_end for x in df["_dt"] if pd.notna(x)))
