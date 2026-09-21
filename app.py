@@ -2,7 +2,9 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 import pandas as pd
+import requests
 import streamlit as st
+from bs4 import BeautifulSoup
 
 from openfoot_client import OpenFoot
 from thesportsdb_client import TheSportsDB
@@ -147,6 +149,49 @@ def get_h2h_tsdb(key, home_name, away_name):
         return TheSportsDB(key).h2h(home_name, away_name)
     except Exception:
         return []
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_oddschecker_over05():
+    """Obtiene cuotas O0.5 públicas como referencia; nunca alimentan el Score."""
+    url = "https://www.oddschecker.com/football/over-under-0.5"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153 Safari/537.36", "Accept-Language": "en-GB,en;q=0.9"}
+    try:
+        r = requests.get(url, headers=headers, timeout=12)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        found = []
+        import re
+        for tr in soup.find_all("tr"):
+            txt = " ".join(tr.stripped_strings)
+            prices = re.findall(r"(?<!\\d)(\\d{1,3})\\s*/\\s*(\\d{1,3})(?!\\d)", txt)
+            if not prices:
+                continue
+            m = re.search(r"(.+?)\\s+(?:v|vs|–|-)\\s+(.+?)(?=\\s+\\d{1,3}\\s*/\\s*\\d{1,3})", txt, re.I)
+            if not m:
+                continue
+            home = re.sub(r"^.*?\\b(?:AM|PM)\\b\\s*", "", m.group(1), flags=re.I).strip()
+            away = m.group(2).strip()
+            num, den = map(int, prices[0])
+            if den:
+                found.append({"home": home, "away": away, "odds": round(1 + num / den, 3)})
+        return found, None
+    except Exception as e:
+        return [], str(e)
+
+def match_reference_odd(home, away, odds_rows):
+    def tokens(name):
+        stop = {"fc","cf","afc","sc","club","de","the","united"}
+        return {x for x in norm(name).split() if len(x) >= 3 and x not in stop}
+    ht, at = tokens(home), tokens(away)
+    best, best_score = None, 0.0
+    for item in odds_rows:
+        oh, oa = tokens(item["home"]), tokens(item["away"])
+        hs = len(ht & oh) / max(1, len(ht | oh))
+        aas = len(at & oa) / max(1, len(at | oa))
+        score = (hs + aas) / 2
+        if score > best_score:
+            best, best_score = item, score
+    return (best["odds"], best_score) if best and best_score >= 0.34 else (None, best_score)
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_whitelist_matches(key, day):
@@ -306,6 +351,8 @@ elif page == "Radar":
     # El Radar solo muestra partidos que todavía no comenzaron.
     matches = [m for m in matches if m.get("status") == "scheduled"]
 
+    odds_rows, odds_error = get_oddschecker_over05()
+
     rows = []
     for m in matches:
         comp = m.get("competition") or {}
@@ -345,6 +392,9 @@ elif page == "Radar":
                 except Exception:
                     analysis_label = "⚪ Datos insuficientes"
 
+        ref_odd, odds_match_score = match_reference_odd(home.get("name",""), away.get("name",""), odds_rows)
+        odds_range = "✅ 1.02–1.08" if ref_odd is not None and 1.02 <= ref_odd <= 1.08 else ("⬜ Fuera de rango" if ref_odd is not None else "—")
+
         rows.append({
             "Hora CR": kickoff.strftime("%I:%M %p").lstrip("0") if kickoff else "",
             "_dt": kickoff,
@@ -358,6 +408,9 @@ elif page == "Radar":
             "H2H 0-0": f"{h2h_zz}/{h2h_n}" if h2h_n else "—",
             "P(+0.5) modelo": f"{model_p}%" if model_p is not None else "—",
             "Score +0.5": analysis_score if analysis_score is not None else "—",
+            "Cuota O0.5 ref.": ref_odd if ref_odd is not None else "—",
+            "Rango cuota": odds_range,
+            "_odds_match_score": round(odds_match_score, 2),
             "Riesgo": risk_label,
             "_risk_score": risk_score,
             "_risk_reasons": tuple(risk_reasons),
@@ -409,6 +462,12 @@ elif page == "Radar":
         c.metric("Tarde · 12:15 PM–11:30 PM", afternoon)
         dcol.metric("Fuera de tandas", outside)
         st.info("Score +0.5 experimental basado en resultados recientes de TheSportsDB. Es un índice de perfil, no una probabilidad calibrada.")
+        if odds_error:
+            st.warning(f"Cuotas de referencia no disponibles temporalmente: {odds_error}")
+        elif not odds_rows:
+            st.caption("Oddschecker respondió, pero no se pudieron interpretar cuotas O0.5 en esta carga.")
+        else:
+            st.caption(f"Cuotas O0.5 de referencia: {len(odds_rows)} partidos leídos de Oddschecker · caché 5 min · confirmar precio final en bet365.")
         with st.expander(f"Diagnóstico · {provider}"):
             st.caption("Información técnica para validar qué proveedor está ejecutando el Radar.")
             if provider.startswith("TheSportsDB"):
@@ -482,7 +541,7 @@ elif page == "Radar":
             shown = shown[shown["Riesgo"].isin(["🟢 Muy bajo", "🟢 Bajo"])]
         elif risk_filter:
             shown = shown[shown["Riesgo"].isin(risk_filter)]
-        visible_cols = ["Hora CR", "Competición", "Partido", "0-0 Local", "0-0 Visit.", "Marca ≥1", "Recibe ≥1", "Casa/Fuera 0-0", "H2H 0-0", "P(+0.5) modelo", "Score +0.5", "Riesgo", "Estado"]
+        visible_cols = ["Hora CR", "Competición", "Partido", "0-0 Local", "0-0 Visit.", "Marca ≥1", "Recibe ≥1", "Casa/Fuera 0-0", "H2H 0-0", "P(+0.5) modelo", "Score +0.5", "Riesgo", "Cuota O0.5 ref.", "Rango cuota", "Estado"]
         st.dataframe(shown[visible_cols], use_container_width=True, hide_index=True)
         st.subheader("Experimento")
         st.caption("Guarda una fotografía prepartido de los análisis visibles. El resultado podrá completarse después sin cambiar el Score original.")
