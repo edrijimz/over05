@@ -97,3 +97,62 @@ def poisson_over05(home: TeamForm, away: TeamForm):
         return None
     lam = (home.avg_total_goals + away.avg_total_goals) / 2
     return round((1 - math.exp(-lam)) * 100, 1)
+
+
+def risk_level(home: TeamForm, away: TeamForm, home_venue: TeamForm | None = None, away_venue: TeamForm | None = None, h2h_zero_zero: int = 0, h2h_n: int = 0):
+    if home.matches < 5 or away.matches < 5:
+        return "⚪ Sin evaluar", 0, ["Histórico insuficiente"]
+
+    risk = 0
+    reasons = []
+    total_n = home.matches + away.matches
+    zz = home.zero_zero + away.zero_zero
+    no_score = (home.matches - home.scored) + (away.matches - away.scored)
+
+    zz_rate = zz / total_n
+    no_score_rate = no_score / total_n
+    risk += min(35, round(zz_rate * 140))
+    risk += min(30, round(no_score_rate * 60))
+
+    if zz == 0:
+        reasons.append("Sin 0-0 en la forma general reciente")
+    elif zz <= 2:
+        reasons.append("Pocos 0-0 recientes")
+    else:
+        reasons.append("Varios 0-0 recientes")
+
+    best_cover = max(home.scored / home.matches, away.scored / away.matches)
+    if best_cover >= 0.9:
+        risk -= 12
+        reasons.append("Al menos un equipo marcó en ≥90% de su muestra")
+    elif best_cover >= 0.8:
+        risk -= 7
+        reasons.append("Al menos un equipo marcó en ≥80% de su muestra")
+    else:
+        reasons.append("Ningún equipo alcanza 80% de cobertura individual")
+
+    if home_venue and away_venue:
+        venue_n = home_venue.matches + away_venue.matches
+        if venue_n:
+            venue_zz = home_venue.zero_zero + away_venue.zero_zero
+            risk += min(15, round((venue_zz / venue_n) * 60))
+            if venue_zz:
+                reasons.append("Hay 0-0 en los splits casa/fuera")
+
+    if h2h_n:
+        risk += min(10, round((h2h_zero_zero / h2h_n) * 20))
+        if h2h_zero_zero:
+            reasons.append("El H2H contiene 0-0")
+
+    risk = max(0, min(int(risk), 100))
+    if risk <= 12:
+        label = "🟢 Muy bajo"
+    elif risk <= 25:
+        label = "🟢 Bajo"
+    elif risk <= 45:
+        label = "🟡 Medio"
+    elif risk <= 65:
+        label = "🟠 Alto"
+    else:
+        label = "🔴 Muy alto"
+    return label, risk, reasons
