@@ -565,7 +565,9 @@ elif page == "Radar":
                 st.write(f"Partidos leídos de Oddschecker: {len(odds_rows)}")
                 st.write(f"Partidos del Radar con coincidencia: {matched_odds}/{len(df)}")
                 if odds_rows:
-                    st.dataframe(pd.DataFrame(odds_rows[:30]), use_container_width=True, hide_index=True)\n                st.write("**Diagnóstico API Oddschecker**")\n                st.json(odds_diag)
+                    st.dataframe(pd.DataFrame(odds_rows[:30]), use_container_width=True, hide_index=True)
+                st.write("**Diagnóstico API Oddschecker**")
+                st.json(odds_diag)
         with st.expander(f"Diagnóstico · {provider}"):
             st.caption("Información técnica para validar qué proveedor está ejecutando el Radar.")
             if provider.startswith("TheSportsDB"):
