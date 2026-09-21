@@ -151,35 +151,124 @@ def get_h2h_tsdb(key, home_name, away_name):
         return []
 
 @st.cache_data(ttl=300, show_spinner=False)
-def get_oddschecker_over05():
-    """Fallback estable: cupón público específico O/U 0.5 de Oddschecker."""
-    url = "https://www.oddschecker.com/football/over-under-0.5"
+def get_oddschecker_over05(day):
+    """Obtiene O0.5 desde el JSON que usa Oddschecker Accumulator."""
+    cards = "30175,9155204,9098782,9020854,7350881,75,19061,8706,8705,28780,79,19065,9123568,80,8631121,16658,19082,15845,17515,33566,9117862,9041024,9041023,9105385,9084556,31412,90,10706,10704,9156048,10869,10928,10867,10879,16586,10873,10926,9100891,10846,22521,9118464,20311,18334,16285,18629,11638,281,8707,24002,26227,9076483,9085251,24412,23954,9117395,18499,8079172,11641,24094,9112681,24439,11635,10095,11722,17225,8738,10890,24263,10903,422039,10894,11715,26102,13400,17495,24067,18347,23980,8677499,16839,26671,4958315,11782,17319,11780,10892,10900,13525,19031,11717,23852,10184,19073,9092469,11719,8197690,17683,421835,19039,18112,416270,27688,18348,26338,30199,18503,18289,422333,422723,9088192,20471,27769,24547"
+    url = (
+        "https://www.oddschecker.com/api/acca/v1/acca/coupon/cards/"
+        f"{cards}/marketTemplate/9/loadDataFor/3/forDate/{day}/andDays/1"
+    )
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.oddschecker.com/football/accumulator",
         "Accept-Language": "en-GB,en;q=0.9",
     }
     try:
-        r = requests.get(url, headers=headers, timeout=12)
+        r = requests.get(url, headers=headers, timeout=20)
         r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-        import re
-        found, seen = [], set()
-        text = " ".join(soup.stripped_strings)
-        pattern = re.compile(
-            r"(\d{1,2}:\d{2})\s+(?:TV\s+)?(.{2,80}?)\s+v\s+(.{2,80}?)\s+"
-            r"(\d{1,3})\s*/\s*(\d{1,3})\s+(\d{1,3})\s*/\s*(\d{1,3})",
-            re.I,
-        )
-        for m in pattern.finditer(text):
-            home, away = m.group(2).strip(), m.group(3).strip()
-            num, den = int(m.group(4)), int(m.group(5))
-            key = (norm(home), norm(away))
-            if den and key not in seen:
-                seen.add(key)
-                found.append({"home": home, "away": away, "odds": round(1 + num / den, 3)})
-        return found, None
+        data = r.json()
+
+        subevents = {}
+        for se in data.get("subevents", []):
+            # The feed can contain live/non-live duplicates; names are what we
+            # need for matching against TheSportsDB.
+            sid = se.get("id")
+            if sid is not None:
+                subevents[sid] = {
+                    "home": se.get("homeTeamName", ""),
+                    "away": se.get("awayTeamName", ""),
+                }
+
+        # Resolve OVER 0.5 bet ids to their subevent ids.
+        over_bets = {}
+        for market in data.get("markets", []):
+            if market.get("marketTemplateId") != 9:
+                continue
+            sid = market.get("subeventId")
+            for bet in market.get("bets", []) or []:
+                if (
+                    str(bet.get("line")) == "0.5"
+                    and str(bet.get("genericName", bet.get("betName", ""))).upper() == "OVER"
+                ):
+                    bid = bet.get("ocBetId", bet.get("betId"))
+                    if bid is not None:
+                        over_bets[bid] = sid
+
+        # Some responses expose bets at top level rather than nested in markets.
+        for bet in data.get("bets", []):
+            if (
+                bet.get("marketTemplateId") == 9
+                and str(bet.get("line")) == "0.5"
+                and str(bet.get("genericName", bet.get("betName", ""))).upper() == "OVER"
+            ):
+                bid = bet.get("ocBetId", bet.get("betId"))
+                sid = bet.get("subeventId")
+                if bid is not None and sid is not None:
+                    over_bets[bid] = sid
+
+        # Prices can be under odds/prices/bookmakerOdds depending on feed shape.
+        price_rows = []
+        for key in ("odds", "prices", "bookmakerOdds"):
+            val = data.get(key, [])
+            if isinstance(val, list):
+                price_rows.extend(val)
+
+        # Recursively collect objects containing betId + decimal, making the
+        # parser tolerant of Oddschecker nesting changes.
+        def collect_prices(obj):
+            if isinstance(obj, dict):
+                if ("betId" in obj or "ocBetId" in obj) and "decimal" in obj:
+                    price_rows.append(obj)
+                for v in obj.values():
+                    collect_prices(v)
+            elif isinstance(obj, list):
+                for v in obj:
+                    collect_prices(v)
+        collect_prices(data)
+
+        best = {}
+        for p in price_rows:
+            bid = p.get("betId", p.get("ocBetId"))
+            sid = over_bets.get(bid)
+            if sid is None:
+                continue
+            try:
+                dec = float(p.get("decimal"))
+            except (TypeError, ValueError):
+                continue
+            if dec <= 1:
+                continue
+            if sid not in best or dec > best[sid]:
+                best[sid] = dec
+
+        found = []
+        seen = set()
+        for sid, dec in best.items():
+            teams = subevents.get(sid)
+            if not teams or not teams["home"] or not teams["away"]:
+                continue
+            key = (norm(teams["home"]), norm(teams["away"]))
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append({
+                "home": teams["home"],
+                "away": teams["away"],
+                "odds": round(dec, 3),
+                "source": "Oddschecker API",
+            })
+
+        diag = {
+            "HTTP": r.status_code,
+            "subevents": len(subevents),
+            "over_bet_ids": len(over_bets),
+            "prices_found": len(price_rows),
+            "matched_prices": len(found),
+        }
+        return found, None, diag
     except Exception as e:
-        return [], str(e)
+        return [], str(e), {"url_date": day}
 
 def match_reference_odd(home, away, odds_rows):
     def tokens(name):
@@ -354,7 +443,7 @@ elif page == "Radar":
     # El Radar solo muestra partidos que todavía no comenzaron.
     matches = [m for m in matches if m.get("status") == "scheduled"]
 
-    odds_rows, odds_error = get_oddschecker_over05()
+    odds_rows, odds_error, odds_diag = get_oddschecker_over05(d.isoformat())
 
     rows = []
     for m in matches:
@@ -476,7 +565,7 @@ elif page == "Radar":
                 st.write(f"Partidos leídos de Oddschecker: {len(odds_rows)}")
                 st.write(f"Partidos del Radar con coincidencia: {matched_odds}/{len(df)}")
                 if odds_rows:
-                    st.dataframe(pd.DataFrame(odds_rows[:30]), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(odds_rows[:30]), use_container_width=True, hide_index=True)\n                st.write("**Diagnóstico API Oddschecker**")\n                st.json(odds_diag)
         with st.expander(f"Diagnóstico · {provider}"):
             st.caption("Información técnica para validar qué proveedor está ejecutando el Radar.")
             if provider.startswith("TheSportsDB"):
