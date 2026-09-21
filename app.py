@@ -182,6 +182,57 @@ def resolve_tsdb_team_id(key, team_id, team_name):
     return (best_tid or (candidates[0] if candidates else None)), best_events
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def get_tsdb_season_events(key, league_id, season):
+    if not league_id or not season:
+        return []
+    try:
+        return TheSportsDB(key).season_events(str(league_id), str(season))
+    except Exception:
+        return []
+
+def tsdb_team_history_from_season(events, team_id, before_date, limit=10):
+    """Build recent team history from the league season when eventslast is incomplete."""
+    if not team_id:
+        return []
+    rows = []
+    for e in events or []:
+        if str(team_id) not in {str(e.get("idHomeTeam") or ""), str(e.get("idAwayTeam") or "")}:
+            continue
+        if e.get("intHomeScore") is None or e.get("intAwayScore") is None:
+            continue
+        event_date = str(e.get("dateEvent") or "")[:10]
+        if before_date and event_date and event_date >= before_date:
+            continue
+        rows.append(e)
+    rows.sort(
+        key=lambda e: (str(e.get("dateEvent") or ""), str(e.get("strTime") or "")),
+        reverse=True,
+    )
+    return rows[:limit]
+
+def merge_tsdb_history(primary, fallback, team_id, limit=10):
+    """Merge team endpoint + season endpoint without duplicating events."""
+    merged, seen = [], set()
+    for e in list(primary or []) + list(fallback or []):
+        if str(team_id) not in {str(e.get("idHomeTeam") or ""), str(e.get("idAwayTeam") or "")}:
+            continue
+        eid = str(e.get("idEvent") or "")
+        key = eid or (
+            str(e.get("dateEvent") or ""),
+            str(e.get("idHomeTeam") or ""),
+            str(e.get("idAwayTeam") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(e)
+    merged.sort(
+        key=lambda e: (str(e.get("dateEvent") or ""), str(e.get("strTime") or "")),
+        reverse=True,
+    )
+    return merged[:limit]
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_h2h_tsdb(key, home_name, away_name):
     try:
         return TheSportsDB(key).h2h(home_name, away_name)
@@ -619,6 +670,22 @@ elif page == "Radar":
                 away_id, away_events = resolve_tsdb_team_id(
                     tsdb_key, away_id, event.get("strAwayTeam") or away.get("name", "")
                 )
+                # eventslast.php can be incomplete for some TSDB competitions.
+                # Premium also gives us the whole league season, so use it as a
+                # fallback and build each team's previous matches from that data.
+                league_id = event.get("idLeague")
+                season = event.get("strSeason")
+                fixture_date = str(event.get("dateEvent") or "")[:10]
+                season_events = get_tsdb_season_events(tsdb_key, league_id, season)
+                home_season = tsdb_team_history_from_season(
+                    season_events, home_id, fixture_date, 10
+                )
+                away_season = tsdb_team_history_from_season(
+                    season_events, away_id, fixture_date, 10
+                )
+                home_events = merge_tsdb_history(home_events, home_season, home_id, 10)
+                away_events = merge_tsdb_history(away_events, away_season, away_id, 10)
+
                 home_form = summarize_tsdb(home_events, str(home_id), 10) if home_id else None
                 away_form = summarize_tsdb(away_events, str(away_id), 10) if away_id else None
                 home_venue = venue_split_tsdb(home_events, str(home_id), "home", 10) if home_id else None
