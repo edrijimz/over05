@@ -144,6 +144,30 @@ def get_team_form_tsdb(key, team_id):
     return TheSportsDB(key).team_last_events(str(team_id))
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def resolve_tsdb_team_id(key, team_id, team_name):
+    """Use fixture team id first; recover by team name when TSDB returns a stale/missing id."""
+    api = TheSportsDB(key)
+    candidates = []
+    if team_id:
+        candidates.append(str(team_id))
+    try:
+        for t in api.team_search(team_name):
+            tid = t.get("idTeam")
+            if tid and str(tid) not in candidates:
+                candidates.append(str(tid))
+    except Exception:
+        pass
+    # Prefer the first candidate that actually has recent results.
+    for tid in candidates:
+        try:
+            events = api.team_last_events(tid)
+            if events:
+                return tid, events
+        except Exception:
+            continue
+    return (candidates[0] if candidates else None), []
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_h2h_tsdb(key, home_name, away_name):
     try:
         return TheSportsDB(key).h2h(home_name, away_name)
@@ -525,8 +549,8 @@ elif page == "Radar":
                     "kickoffAt": kickoff,
                     "competitionName": e.get("strLeague") or "",
                     "competitionId": e.get("idLeague") or "",
-                    "homeTeam": {"name": e.get("strHomeTeam") or ""},
-                    "awayTeam": {"name": e.get("strAwayTeam") or ""},
+                    "homeTeam": {"name": e.get("strHomeTeam") or "", "id": e.get("idHomeTeam")},
+                    "awayTeam": {"name": e.get("strAwayTeam") or "", "id": e.get("idAwayTeam")},
                     "status": status,
                 })
         else:
@@ -573,19 +597,23 @@ elif page == "Radar":
         if provider.startswith("TheSportsDB") and m.get("_raw"):
             event = m["_raw"]
             home_id, away_id = event.get("idHomeTeam"), event.get("idAwayTeam")
-            if home_id and away_id:
-                try:
-                    home_events = get_team_form_tsdb(tsdb_key, str(home_id))
-                    away_events = get_team_form_tsdb(tsdb_key, str(away_id))
-                    home_form = summarize_tsdb(home_events, str(home_id), 10)
-                    away_form = summarize_tsdb(away_events, str(away_id), 10)
-                    home_venue = venue_split_tsdb(home_events, str(home_id), "home", 10)
-                    away_venue = venue_split_tsdb(away_events, str(away_id), "away", 10)
+            try:
+                    home_id, home_events = resolve_tsdb_team_id(
+                        tsdb_key, home_id, event.get("strHomeTeam") or home.get("name", "")
+                    )
+                    away_id, away_events = resolve_tsdb_team_id(
+                        tsdb_key, away_id, event.get("strAwayTeam") or away.get("name", "")
+                    )
+                    home_form = summarize_tsdb(home_events, str(home_id), 10) if home_id else None
+                    away_form = summarize_tsdb(away_events, str(away_id), 10) if away_id else None
+                    home_venue = venue_split_tsdb(home_events, str(home_id), "home", 10) if home_id else None
+                    away_venue = venue_split_tsdb(away_events, str(away_id), "away", 10) if away_id else None
                     h2h_events = get_h2h_tsdb(tsdb_key, event.get("strHomeTeam") or "", event.get("strAwayTeam") or "")
                     h2h_n, h2h_zz = summarize_h2h_tsdb(h2h_events, 5)
-                    model_p = poisson_over05(home_form, away_form)
-                    risk_label, risk_score, risk_reasons = risk_level(home_form, away_form, home_venue, away_venue, h2h_zz, h2h_n)
-                    if home_form.matches >= 5 and away_form.matches >= 5:
+                    if home_form and away_form:
+                        model_p = poisson_over05(home_form, away_form)
+                        risk_label, risk_score, risk_reasons = risk_level(home_form, away_form, home_venue, away_venue, h2h_zz, h2h_n)
+                    if home_form and away_form and home_form.matches >= 5 and away_form.matches >= 5:
                         analysis_score, analysis_label = rate(home_form, away_form, h2h_zz, h2h_n)
                     else:
                         analysis_label = "⚪ Datos insuficientes"
