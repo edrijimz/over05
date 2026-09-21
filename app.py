@@ -434,7 +434,7 @@ elif page == "Radar":
             shown = df[~(in_morning | in_afternoon)]
         else:
             shown = df
-                visible_cols = ["Hora CR", "Competición", "Partido", "0-0 Local", "0-0 Visit.", "Marca ≥1", "Recibe ≥1", "Score +0.5", "Estado"]
+        visible_cols = ["Hora CR", "Competición", "Partido", "0-0 Local", "0-0 Visit.", "Marca ≥1", "Recibe ≥1", "Score +0.5", "Estado"]
         st.dataframe(shown[visible_cols], use_container_width=True, hide_index=True)
         st.subheader("Detalle de los datos usados")
         for _, row in shown.iterrows():
