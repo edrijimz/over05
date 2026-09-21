@@ -498,7 +498,7 @@ elif page == "Radar":
                     ))
                     saved += 1
             st.success(f"{saved} evaluaciones prepartido guardadas.")
-                st.subheader("Detalle de los datos usados")
+        st.subheader("Detalle de los datos usados")
         for _, row in shown.iterrows():
             with st.expander(str(row["Partido"]) + " · " + str(row["Estado"])):
                 st.write("**Riesgo +0.5:** " + str(row["Riesgo"]) + " · índice de riesgo " + str(row["_risk_score"]) + "/100")
