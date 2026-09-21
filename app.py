@@ -212,7 +212,15 @@ elif page == "Radar":
     league_mapping, league_errors = {}, []
     try:
         if provider.startswith("TheSportsDB"):
-            raw = TheSportsDB(tsdb_key).events_day(d.isoformat(), "Soccer")
+            # A Costa Rica calendar day overlaps two UTC calendar dates.
+            # Fetch both so evening matches in CR (already next day in UTC)
+            # stay under the correct local date.
+            api_tsdb = TheSportsDB(tsdb_key)
+            raw = (
+                api_tsdb.events_day(d.isoformat(), "Soccer")
+                + api_tsdb.events_day((d + timedelta(days=1)).isoformat(), "Soccer")
+            )
+            raw = list({str(e.get("idEvent")): e for e in raw if e.get("idEvent")}.values())
             tsdb_mapping = get_tsdb_whitelist(tsdb_key)
             allowed_ids = set(tsdb_mapping.values())
             raw = [e for e in raw if str(e.get("idLeague") or "") in allowed_ids]
@@ -242,6 +250,10 @@ elif page == "Radar":
                 event_date = e.get("dateEvent") or d.isoformat()
                 event_time = e.get("strTime") or "00:00:00"
                 kickoff = f"{event_date}T{event_time}+00:00"
+                # Keep only events whose converted kickoff belongs to the
+                # selected Costa Rica calendar date.
+                if cr_time(kickoff).date() != d:
+                    continue
                 matches.append({
                     "id": e.get("idEvent"),
                     "kickoffAt": kickoff,
