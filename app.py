@@ -7,7 +7,7 @@ import streamlit as st
 from openfoot_client import OpenFoot
 from thesportsdb_client import TheSportsDB
 from database import evaluations
-from analysis_engine import summarize_tsdb, rate, venue_split_tsdb, summarize_h2h_tsdb, poisson_over05
+from analysis_engine import summarize_tsdb, rate, venue_split_tsdb, summarize_h2h_tsdb, poisson_over05, risk_level
 from config import TIMEZONE, TARGET_LEAGUES, KNOWN_COMPETITION_IDS, TSDB_TARGET_ALIASES, TSDB_EXTRA_COMPETITION_ALIASES, TSDB_KNOWN_LEAGUE_IDS
 
 st.set_page_config(page_title="Over 0.5 Analyzer", page_icon="⚽", layout="wide")
@@ -322,6 +322,7 @@ elif page == "Radar":
         home_form = away_form = home_venue = away_venue = None
         h2h_n = h2h_zz = 0
         model_p = None
+        risk_label, risk_score, risk_reasons = "⚪ Sin evaluar", 0, []
         if provider.startswith("TheSportsDB") and m.get("_raw"):
             event = m["_raw"]
             home_id, away_id = event.get("idHomeTeam"), event.get("idAwayTeam")
@@ -336,6 +337,7 @@ elif page == "Radar":
                     h2h_events = get_h2h_tsdb(tsdb_key, event.get("strHomeTeam") or "", event.get("strAwayTeam") or "")
                     h2h_n, h2h_zz = summarize_h2h_tsdb(h2h_events, 5)
                     model_p = poisson_over05(home_form, away_form)
+                    risk_label, risk_score, risk_reasons = risk_level(home_form, away_form, home_venue, away_venue, h2h_zz, h2h_n)
                     if home_form.matches >= 5 and away_form.matches >= 5:
                         analysis_score, analysis_label = rate(home_form, away_form, h2h_zz, h2h_n)
                     else:
@@ -356,6 +358,9 @@ elif page == "Radar":
             "H2H 0-0": f"{h2h_zz}/{h2h_n}" if h2h_n else "—",
             "P(+0.5) modelo": f"{model_p}%" if model_p is not None else "—",
             "Score +0.5": analysis_score if analysis_score is not None else "—",
+            "Riesgo": risk_label,
+            "_risk_score": risk_score,
+            "_risk_reasons": tuple(risk_reasons),
             "Estado": analysis_label,
             "_home_scores": home_form.scores if home_form else (),
             "_away_scores": away_form.scores if away_form else (),
@@ -446,6 +451,13 @@ elif page == "Radar":
                     st.json(get_match_meta(api_key, d.isoformat()))
             except Exception as e:
                 st.error(f"No se pudo leer la metadata: {e}")
+        risk_filter = st.multiselect(
+            "Filtrar por riesgo",
+            ["🟢 Muy bajo", "🟢 Bajo", "🟡 Medio", "🟠 Alto", "🔴 Muy alto", "⚪ Sin evaluar"],
+            default=[],
+            placeholder="Todos los niveles",
+        )
+        low_risk_only = st.toggle("Solo bajo riesgo", value=False)
         view = st.radio("Tanda", ["Todos", "Mañana", "Tarde", "Fuera de tandas"], horizontal=True)
         in_morning = df["_dt"].apply(lambda x: morning_start <= x.time() <= morning_end if pd.notna(x) else False)
         in_afternoon = df["_dt"].apply(lambda x: afternoon_start <= x.time() <= afternoon_end if pd.notna(x) else False)
@@ -457,11 +469,18 @@ elif page == "Radar":
             shown = df[~(in_morning | in_afternoon)]
         else:
             shown = df
-        visible_cols = ["Hora CR", "Competición", "Partido", "0-0 Local", "0-0 Visit.", "Marca ≥1", "Recibe ≥1", "Casa/Fuera 0-0", "H2H 0-0", "P(+0.5) modelo", "Score +0.5", "Estado"]
+        if low_risk_only:
+            shown = shown[shown["Riesgo"].isin(["🟢 Muy bajo", "🟢 Bajo"])]
+        elif risk_filter:
+            shown = shown[shown["Riesgo"].isin(risk_filter)]
+        visible_cols = ["Hora CR", "Competición", "Partido", "0-0 Local", "0-0 Visit.", "Marca ≥1", "Recibe ≥1", "Casa/Fuera 0-0", "H2H 0-0", "P(+0.5) modelo", "Score +0.5", "Riesgo", "Estado"]
         st.dataframe(shown[visible_cols], use_container_width=True, hide_index=True)
         st.subheader("Detalle de los datos usados")
         for _, row in shown.iterrows():
             with st.expander(str(row["Partido"]) + " · " + str(row["Estado"])):
+                st.write("**Riesgo +0.5:** " + str(row["Riesgo"]) + " · índice de riesgo " + str(row["_risk_score"]) + "/100")
+                if row["_risk_reasons"]:
+                    st.write(" · ".join(row["_risk_reasons"]))
                 left, right = st.columns(2)
                 with left:
                     st.write("**Últimos resultados · local**")
